@@ -58,7 +58,7 @@ tests/            # pytest; builders.py = model factories, conftest.py builds sy
 ## tsMuxeR facts (verified with 2.7.0)
 
 - `tsMuxeR <file>` (detection mode) lists tracks (`Track ID`, `Stream ID`, `Stream lang`). The build muxes **exactly the tracks tsMuxeR detects** (IDs come from that output, never guessed from PyAV indices) after checking the video/audio/subtitle counts match the probe.
-- `MUXOPT --blu-ray` with a directory as output creates `BDMV/` (index, MovieObject, PLAYLIST, CLIPINF, STREAM, BACKUP). It does **not** create `CERTIFICATE/`.
+- `MUXOPT --blu-ray` with a directory as output creates `BDMV/` (index, MovieObject, PLAYLIST, CLIPINF, STREAM, BACKUP). It also creates `CERTIFICATE/BACKUP/` and empty `BDMV/{AUXDATA,BDJO,JAR,META}` and `BDMV/BACKUP/{BDJO,JAR}` directories: they belong on the disc, so any listing or copy of a BDMV must keep **empty directories** (a `find -type f` misses them).
 - mkv chapters become `--custom-chapters=hh:mm:ss.mmm;...` (a chapter at 0 is added if missing). No chapters are invented when the mkv has none.
 - `--blu-ray` with an output name ending in `.iso` makes tsMuxeR write an ISO during the mux, but it cannot pack an existing directory (so it cannot include a future menu). Its ISO is **pure UDF 2.50 with a Metadata Partition** (BEA01/NSR03/TEA01 volume descriptors, no ISO9660 `CD001`), the layout ImgBurn also writes; pycdlib cannot even open it ("must have at least one PVD").
 

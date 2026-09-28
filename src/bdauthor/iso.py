@@ -104,22 +104,26 @@ def _add_tree(iso: pycdlib.PyCdlib, root: Path, directories: list[Path], files: 
         iso.add_file(str(root / relative), target, udf_path="/" + relative.as_posix())
 
 
-def _verify(path: Path, root: Path, files: list[Path]) -> None:
-    """Read the image back and compare the file list and sizes with the source."""
+def _verify(path: Path, root: Path, directories: list[Path], files: list[Path]) -> None:
+    """Read the image back and compare directories, file list and sizes with the source."""
     iso = pycdlib.PyCdlib()
     try:
         iso.open(str(path))
+        found_dirs: set[str] = set()
         found: dict[str, int] = {}
-        for dirpath, _dirs, names in iso.walk(udf_path="/"):
+        for dirpath, dirs, names in iso.walk(udf_path="/"):
+            base = dirpath.rstrip("/")
+            found_dirs.update(f"{base}/{name}" for name in dirs)
             for name in names:
-                full = f"{dirpath.rstrip('/')}/{name}"
+                full = f"{base}/{name}"
                 found[full] = iso.get_record(udf_path=full).get_data_length()
     finally:
         iso.close()
 
     expected = {"/" + f.as_posix(): (root / f).stat().st_size for f in files}
-    if found != expected:
-        missing = sorted(set(expected) - set(found))
+    expected_dirs = {"/" + d.as_posix() for d in directories}  # includes empty ones (AUXDATA, ...)
+    if found != expected or found_dirs != expected_dirs:
+        missing = sorted((set(expected) - set(found)) | (expected_dirs - found_dirs))
         wrong = sorted(p for p in expected.keys() & found.keys() if expected[p] != found[p])
         raise IsoError(f"the image does not match the source (missing: {missing}, wrong size: {wrong})")
 
@@ -166,7 +170,7 @@ def build_iso(
 
         iso.write(str(partial), progress_cb=report)
         iso.close()
-        _verify(partial, root, files)
+        _verify(partial, root, directories, files)
         partial.replace(dest)
     except (PyCdlibException, OSError) as exc:
         raise IsoError(f"could not write {dest}: {exc}") from exc

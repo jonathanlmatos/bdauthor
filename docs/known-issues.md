@@ -34,9 +34,9 @@ What has actually been tested, so nobody mistakes "passes the tests" for "plays 
 
 ## Disc structure
 
-### No `CERTIFICATE/` directory (open)
+### Empty directories are part of the disc (worked around)
 
-tsMuxeR does not create it. It is optional on an unencrypted disc and tsMuxeR output is widely used without it, but it is one of the first things to look at if a hardware player refuses the disc.
+tsMuxeR creates `CERTIFICATE/BACKUP/` plus empty `BDMV/AUXDATA`, `BDMV/BDJO`, `BDMV/JAR`, `BDMV/META`, `BDMV/BACKUP/BDJO` and `BDMV/BACKUP/JAR`. `bdauthor iso` keeps them and its read-back check compares directories as well as files. Any tool that lists or copies a disc by files only (`find -type f`, a naive copy) loses them, which is easy to mistake for a missing `CERTIFICATE/`.
 
 ### BDMV on DVD-5 / DVD-9 is non-standard (by design)
 
@@ -79,7 +79,7 @@ A text subtitle (SRT/ASS) or a second video stream is an error, not something si
 - CLI only; the GUI is never used. Version 2.7.0, downloaded by hand into `vendor/tsmuxer/` (git-ignored). SHA-256 of the zip is in `AGENTS.md`.
 - File names containing a double quote (`"`) are rejected, because the meta file quotes paths.
 - Track numbers come from tsMuxeR's own detection output. If its list ever disagrees with the probe (different counts, or a different codec family for a replaced audio track) the build stops instead of guessing.
-- The tool does not create `CERTIFICATE/` (see above) and writes a `BACKUP/` copy of the navigation files.
+- It writes a `BACKUP/` copy of the navigation files and the empty directories described above.
 
 ## PyAV / FFmpeg
 

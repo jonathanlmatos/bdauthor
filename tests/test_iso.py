@@ -53,6 +53,34 @@ def test_round_trip_contains_the_disc_files_byte_for_byte(make_disc, tmp_path):
     assert result.size_bytes % 2048 == 0
 
 
+def udf_dirs(iso_path) -> set[str]:
+    iso = pycdlib.PyCdlib()
+    iso.open(str(iso_path))
+    try:
+        found = set()
+        for dirpath, dirs, _names in iso.walk(udf_path="/"):
+            found.update(f"{dirpath.rstrip('/')}/{name}" for name in dirs)
+        return found
+    finally:
+        iso.close()
+
+
+def test_empty_directories_of_the_disc_are_preserved(make_disc, tmp_path):
+    result = build_iso(make_disc(), tmp_path / "disc.iso", Media.BD25)
+    dirs = udf_dirs(result.path)
+    for expected in (
+        "/BDMV/AUXDATA",
+        "/BDMV/BDJO",
+        "/BDMV/JAR",
+        "/BDMV/META",
+        "/BDMV/BACKUP/BDJO",
+        "/BDMV/BACKUP/JAR",
+        "/CERTIFICATE/BACKUP",
+    ):
+        assert expected in dirs
+    assert not any(d.startswith(("/extra", "/notes")) for d in dirs)
+
+
 def test_files_outside_the_disc_directories_are_left_out(make_disc, tmp_path):
     result = build_iso(make_disc(), tmp_path / "disc.iso", Media.BD25)
     assert not any(p.startswith(("/notes", "/extra")) for p in udf_files(result.path))

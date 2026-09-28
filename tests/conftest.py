@@ -101,6 +101,17 @@ def make_disc(tmp_path):
             "notes.txt": b"not part of the disc",
             "extra/readme.md": b"not part of the disc",
         }
+        empty_dirs = (  # what tsMuxeR creates
+            "BDMV/AUXDATA",
+            "BDMV/BDJO",
+            "BDMV/JAR",
+            "BDMV/META",
+            "BDMV/BACKUP/BDJO",
+            "BDMV/BACKUP/JAR",
+            "CERTIFICATE/BACKUP",
+        )
+        for relative in empty_dirs:
+            (root / relative).mkdir(parents=True, exist_ok=True)
         for relative, data in contents.items():
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)

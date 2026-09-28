@@ -189,3 +189,11 @@ def test_real_mux_transcoding_does_nothing_when_the_audio_is_already_fine(good_m
         good_mkv, tmp_path / "disc", Media.BD25, TsMuxer(tsmuxer), transcode_audio=True
     )
     assert not result.report.warnings
+
+
+def test_real_mux_creates_certificate_and_the_empty_bdmv_directories(good_mkv, tmp_path, tsmuxer):
+    result = build_disc(good_mkv, tmp_path / "disc", Media.BD25, TsMuxer(tsmuxer))
+    disc = result.bdmv_dir.parent
+    assert (disc / "CERTIFICATE" / "BACKUP").is_dir()
+    for name in ("AUXDATA", "BDJO", "JAR", "META"):
+        assert (result.bdmv_dir / name).is_dir(), name
