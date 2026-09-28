@@ -53,6 +53,18 @@ class VideoStream:
     ref_frames: int | None
     bitrate: int | None  # bits per second
 
+    @property
+    def level_label(self) -> str | None:
+        return None if self.level is None else f"{self.level // 10}.{self.level % 10}"
+
+    @property
+    def rate_label(self) -> str | None:
+        """Frame rate with scan type, e.g. "23.976p" or "25i"."""
+        if self.fps is None:
+            return None
+        rate = f"{float(self.fps):.3f}".rstrip("0").rstrip(".")
+        return rate + ("i" if self.interlaced else "p")
+
 
 @dataclass(frozen=True)
 class AudioStream:

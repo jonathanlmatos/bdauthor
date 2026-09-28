@@ -15,6 +15,9 @@ def write_mkv(
     pix_fmt: str = "yuv420p",
     acodec: str | None = "ac3",
     sample_rate: int = 48000,
+    audio_language: str | None = None,
+    audio_title: str | None = None,
+    chapters: list[tuple[float, float, str]] | None = None,
 ) -> None:
     """Write a tiny synthetic mkv (gray H.264 video + silent audio)."""
     with av.open(str(path), "w") as out:
@@ -23,6 +26,23 @@ def write_mkv(
         audio = out.add_stream(acodec, rate=sample_rate) if acodec else None
         if audio is not None:
             audio.layout = "stereo"
+            if audio_language:
+                audio.metadata["language"] = audio_language
+            if audio_title:
+                audio.metadata["title"] = audio_title
+        if chapters:
+            out.set_chapters(
+                [
+                    {
+                        "id": n,
+                        "start": round(start * 1000),
+                        "end": round(end * 1000),
+                        "time_base": Fraction(1, 1000),
+                        "metadata": {"title": title},
+                    }
+                    for n, (start, end, title) in enumerate(chapters, start=1)
+                ]
+            )
 
         for i in range(round(float(fps) * seconds)):
             frame = av.VideoFrame(width, height, pix_fmt)

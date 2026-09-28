@@ -5,6 +5,7 @@ from typing import Annotated
 import typer
 
 from bdauthor.cli.doctor import doctor
+from bdauthor.cli.probe import probe
 
 app = typer.Typer(
     help="Automate Blu-ray (BDMV) authoring from .mkv files.",
@@ -24,3 +25,4 @@ def main(
 
 
 app.command()(doctor)
+app.command()(probe)
