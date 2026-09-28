@@ -1,0 +1,22 @@
+[project]
+name = "bdauthor"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Jonathan M", email = "32143682+jonathanlmatos@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "av>=18.1.0",
+    "pillow>=12.3.0",
+    "pycdlib>=1.21.0",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+bdauthor = "bdauthor.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
