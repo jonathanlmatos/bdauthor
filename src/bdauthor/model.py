@@ -129,6 +129,11 @@ class Finding:
     message: str
     stream_index: int | None = None
 
+    @property
+    def label(self) -> str:
+        """Rule name plus stream index, e.g. "video #0"."""
+        return self.rule if self.stream_index is None else f"{self.rule} #{self.stream_index}"
+
 
 @dataclass(frozen=True)
 class Report:
