@@ -52,6 +52,7 @@ class VideoStream:
     interlaced: bool | None
     ref_frames: int | None
     bitrate: int | None  # bits per second
+    start_time: float | None = None  # seconds, first timestamp in the container
 
     @property
     def level_label(self) -> str | None:
@@ -77,6 +78,7 @@ class AudioStream:
     bitrate: int | None  # bits per second
     language: str | None
     title: str | None
+    start_time: float | None = None  # seconds, first timestamp in the container
 
 
 @dataclass(frozen=True)

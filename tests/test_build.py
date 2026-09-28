@@ -114,3 +114,78 @@ def test_real_mux_carries_chapters_and_audio_language(make_mkv, tmp_path, tsmuxe
     output = subprocess.run([str(tsmuxer), str(playlist)], capture_output=True, text=True).stdout
     assert "Marks: 00:00:00.000 00:00:00.500" in output
     assert "Stream lang: por" in output
+
+
+# --- audio transcoding with the real tsMuxeR -------------------------------
+
+
+def muxed_streams(bdmv_dir):
+    import av
+
+    with av.open(str(bdmv_dir / "STREAM" / "00000.m2ts")) as container:
+        return container.streams.video[0], container.streams.audio
+
+
+def test_incompatible_audio_is_rejected_unless_transcoding_is_requested(make_mkv, tmp_path):
+    source = make_mkv("aac.mkv", acodec="aac")
+    with pytest.raises(CheckFailed):
+        build_disc(source, tmp_path / "a", Media.BD25, FakeMuxer())
+
+
+def test_real_mux_reencodes_aac_to_ac3_and_leaves_the_video_alone(make_mkv, tmp_path, tsmuxer):
+    source = make_mkv("aac.mkv", acodec="aac", audio_language="por", seconds=2)
+    transcoded: list[float] = []
+
+    result = build_disc(
+        source,
+        tmp_path / "disc",
+        Media.BD25,
+        TsMuxer(tsmuxer),
+        transcode_audio=True,
+        on_transcode_progress=transcoded.append,
+    )
+
+    _, audio_streams = muxed_streams(result.bdmv_dir)
+    assert [s.codec_context.name for s in audio_streams] == ["ac3"]
+    playlist = result.bdmv_dir / "PLAYLIST" / "00000.mpls"
+    detected = subprocess.run([str(tsmuxer), str(playlist)], capture_output=True, text=True).stdout
+    assert "Stream lang: por" in detected
+    assert transcoded and transcoded[-1] == 100.0
+    assert any(f.rule == "audio" and "re-encoded" in f.message for f in result.report.warnings)
+
+
+def audio_delay(bdmv_dir) -> float:
+    video, (audio_stream,) = muxed_streams(bdmv_dir)
+    return float((audio_stream.start_time - video.start_time) * audio_stream.time_base)
+
+
+@pytest.mark.parametrize(
+    ("acodec", "transcode"), [("ac3", False), ("aac", True)], ids=["remux", "transcoded"]
+)
+def test_real_mux_keeps_the_audio_delay_of_the_source(make_mkv, tmp_path, tsmuxer, acodec, transcode):
+    source = make_mkv("late.mkv", acodec=acodec, audio_offset=0.5, seconds=2)
+    result = build_disc(
+        source, tmp_path / "disc", Media.BD25, TsMuxer(tsmuxer), transcode_audio=transcode
+    )
+    assert audio_delay(result.bdmv_dir) == pytest.approx(0.5, abs=0.06)
+
+
+def test_real_mux_of_in_sync_audio_stays_in_sync(good_mkv, tmp_path, tsmuxer):
+    result = build_disc(good_mkv, tmp_path / "disc", Media.BD25, TsMuxer(tsmuxer))
+    assert audio_delay(result.bdmv_dir) == pytest.approx(0.0, abs=0.06)
+
+
+def test_real_mux_downmixes_71_to_51(make_mkv, tmp_path, tsmuxer):
+    source = make_mkv("flac71.mkv", acodec="flac", audio_layout="7.1")
+    result = build_disc(
+        source, tmp_path / "disc", Media.BD25, TsMuxer(tsmuxer), transcode_audio=True
+    )
+    _, (audio_stream,) = muxed_streams(result.bdmv_dir)
+    assert (audio_stream.codec_context.name, audio_stream.codec_context.channels) == ("ac3", 6)
+
+
+def test_real_mux_transcoding_does_nothing_when_the_audio_is_already_fine(good_mkv, tmp_path, tsmuxer):
+    result = build_disc(
+        good_mkv, tmp_path / "disc", Media.BD25, TsMuxer(tsmuxer), transcode_audio=True
+    )
+    assert not result.report.warnings

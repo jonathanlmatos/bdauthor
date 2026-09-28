@@ -77,6 +77,12 @@ def _title(stream) -> str | None:
     return stream.metadata.get("title")
 
 
+def _start_time(stream) -> float | None:
+    if stream.start_time is None:
+        return None
+    return float(stream.start_time * stream.time_base)
+
+
 def _bitrate(stream) -> int | None:
     if stream.codec_context.bit_rate:
         return int(stream.codec_context.bit_rate)
@@ -106,6 +112,7 @@ def _video(stream) -> VideoStream:
         interlaced=None if sps is None else not sps.frame_mbs_only,
         ref_frames=sps.num_ref_frames if sps else None,
         bitrate=_bitrate(stream),
+        start_time=_start_time(stream),
     )
 
 
@@ -134,6 +141,7 @@ def _audio(stream) -> AudioStream:
         bitrate=_bitrate(stream),
         language=stream.language,
         title=_title(stream),
+        start_time=_start_time(stream),
     )
 
 

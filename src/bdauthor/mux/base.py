@@ -1,5 +1,5 @@
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -16,6 +16,8 @@ class MuxError(Exception):
 class MuxRequest:
     info: MediaInfo  # already validated
     output_dir: Path  # BDMV/ is created inside it
+    # Probe audio-stream index -> audio-only file that replaces that stream.
+    audio_replacements: Mapping[int, Path] = field(default_factory=dict)
 
 
 class Muxer(Protocol):

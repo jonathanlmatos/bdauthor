@@ -17,6 +17,8 @@ def write_mkv(
     pix_fmt: str = "yuv420p",
     acodec: str | None = "ac3",
     sample_rate: int = 48000,
+    audio_layout: str = "stereo",
+    audio_offset: float = 0.0,
     audio_language: str | None = None,
     audio_title: str | None = None,
     chapters: list[tuple[float, float, str]] | None = None,
@@ -27,7 +29,7 @@ def write_mkv(
         video.width, video.height, video.pix_fmt = width, height, pix_fmt
         audio = out.add_stream(acodec, rate=sample_rate) if acodec else None
         if audio is not None:
-            audio.layout = "stereo"
+            audio.layout = audio_layout
             if audio_language:
                 audio.metadata["language"] = audio_language
             if audio_title:
@@ -59,12 +61,12 @@ def write_mkv(
         frame_size = audio.codec_context.frame_size or 1024
         for i in range(sample_rate * seconds // frame_size):
             frame = av.AudioFrame(
-                format=audio.codec_context.format.name, layout="stereo", samples=frame_size
+                format=audio.codec_context.format.name, layout=audio_layout, samples=frame_size
             )
             for plane in frame.planes:
                 plane.update(bytes(plane.buffer_size))
             frame.sample_rate = sample_rate
-            frame.pts = i * frame_size
+            frame.pts = round(audio_offset * sample_rate) + i * frame_size
             for packet in audio.encode(frame):
                 out.mux(packet)
         for packet in audio.encode():

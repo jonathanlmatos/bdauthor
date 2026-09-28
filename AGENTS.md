@@ -8,7 +8,8 @@ Personal project. Output plays on **hardware Blu-ray players**, so anything the 
 - Input: `.mkv` only. Video: **1080p H.264 only** (1920x1080 / 1280x720). UHD 4K / HEVC is out of scope.
 - Output: **BDMV** (not AVCHD). Menu is HDMV (no BD-J).
 - Target media (`--media`): `dvd5`, `dvd9`, `bd25`, `bd50` (default `bd25`). DVD media means non-standard "BD5/BD9" (BDMV burned on DVD).
-- **Never re-encode silently.** If a stream is not BD-compatible, the tool reports why and stops. Auto-transcode is a future opt-in flag that must consume the validator's report (for DVD media it would be size-driven).
+- **Never re-encode silently.** If a stream is not BD-compatible, the tool reports why and stops. Video and subtitles are never re-encoded (a video transcode would be a future opt-in flag that consumes the validator's report; for DVD media it would be size-driven).
+- **`--transcode-audio` (opt-in, `check` and `build`)** re-encodes audio streams the validator rejects to AC3 (mono 128 / stereo 192 / 5.1 448 kb/s, 48 kHz, more than 6 channels downmixed to 5.1). The report shows a warning per converted stream and is computed on the post-conversion file (including the size estimate).
 - Never lose resolution.
 - Phase 1 (done): `doctor`, `probe`, `check`, `build` (no menu). Pending in Phase 1: an optional `--deep` packet scan (keyframe interval, peak bitrate, VFR). Phase 2: `plan`, HDMV menu generator (template-driven), `iso`.
 
@@ -32,7 +33,7 @@ Plan the whole disc in memory (a `Disc` model), then write `BDMV/` **once**. Do 
 ```
 src/bdauthor/
   cli/            # thin layer, one file per command (doctor, probe, check, build); root Typer app in __init__.py
-                  #   _report.py renders a Report; NB: in the package namespace `bdauthor.cli.build` etc. are the command functions
+                  #   _report.py renders a Report; _options.py shares --media/--transcode-audio; NB: in the package namespace `bdauthor.cli.build` etc. are the command functions
   deps.py         # locate tsMuxeR / verify environment
   exitcodes.py    # ExitCode enum
   model.py        # dataclasses: Media, MediaInfo, streams, Finding, Report; to_jsonable()
@@ -40,7 +41,8 @@ src/bdauthor/
   probe.py        # PyAV -> MediaInfo
   validate/       # one module per rule group (container, video, audio, subtitles, size) -> Report
   mux/            # base.py (Muxer interface, MuxError) + tsmuxer.py (meta generation + subprocess)
-  build.py        # probe -> validate -> prepare output -> mux -> verify BDMV
+  transcode.py    # AudioPlan, validate_with_audio_transcode (report on the converted file), encode_ac3 (PyAV)
+  build.py        # probe -> validate -> [re-encode audio] -> prepare output -> mux -> verify BDMV
 tests/            # pytest; builders.py = model factories, conftest.py builds synthetic mkvs with PyAV
 ```
 
@@ -56,6 +58,9 @@ tests/            # pytest; builders.py = model factories, conftest.py builds sy
 - mkv chapters become `--custom-chapters=hh:mm:ss.mmm;...` (a chapter at 0 is added if missing). No chapters are invented when the mkv has none.
 - `--blu-ray` with an output name ending in `.iso` makes tsMuxeR write the ISO directly: a candidate for the future `iso` step before falling back to pycdlib.
 - tsMuxeR also has `--avchd`; not used (BDMV only).
+- **tsMuxeR ignores the audio start offset stored in an mkv** (audio and video both start at the same time in the m2ts). The build compensates with `timeshift=<ms>ms` = audio start - video start (from the probe's `start_time`), for remuxed and re-encoded audio alike. `timeshift` accepts negative values.
+- Re-encoded audio is written by PyAV to a temporary **audio-only mkv** (keeps timestamps and language) that the meta file references instead of the source's audio track. Audio tracks are matched to probe streams by order and codec family (`plan_tracks`); it refuses to guess on any mismatch.
+- PyAV facts: `stream.id` is 0 for every mkv stream (not the track number), `container.chapters()` is a method, an unknown `level` is -99 or 0, and an AAC 7.1 *encoder* segfaults (use FLAC 7.1 for test fixtures).
 
 **Thin CLI, fat core**: `cli/` only parses arguments, calls core functions and formats output. Core modules must not import Typer/Rich or print.
 

@@ -1,12 +1,14 @@
 """Orchestration: probe -> validate -> mux -> verify the resulting BDMV directory."""
 
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from bdauthor.model import Media, MediaInfo, Report
 from bdauthor.mux.base import Muxer, MuxRequest, ProgressCallback
 from bdauthor.probe import probe
+from bdauthor.transcode import encode_ac3, validate_with_audio_transcode
 from bdauthor.validate import validate
 
 REQUIRED_FILES = (
@@ -97,19 +99,36 @@ def build_disc(
     muxer: Muxer,
     *,
     force: bool = False,
+    transcode_audio: bool = False,
     on_progress: ProgressCallback | None = None,
+    on_transcode_progress: ProgressCallback | None = None,
 ) -> BuildResult:
     """Validate `source` and, if it is compatible, write `output_dir/BDMV`.
 
-    Raises ProbeError, CheckFailed, BuildError or MuxError.
+    With `transcode_audio`, incompatible audio streams are re-encoded to AC3 first; video and
+    subtitles are never re-encoded.
+
+    Raises ProbeError, CheckFailed, TranscodeError, BuildError or MuxError.
     """
     info = probe(source)
-    report = validate(info, media)
+    if transcode_audio:
+        report, plans = validate_with_audio_transcode(info, media)
+    else:
+        report, plans = validate(info, media), []
     if not report.passed:
         raise CheckFailed(report)
 
     prepare_output(output_dir, force=force)
-    muxer.mux(MuxRequest(info=info, output_dir=output_dir), on_progress)
+    with tempfile.TemporaryDirectory(prefix="bdauthor-audio-") as tmp:
+        replacements: dict[int, Path] = {}
+        for plan in plans:
+            dest = Path(tmp) / f"audio-{plan.source_index}.mkv"
+            encode_ac3(info.path, plan, dest, on_transcode_progress)
+            replacements[plan.source_index] = dest
+        muxer.mux(
+            MuxRequest(info=info, output_dir=output_dir, audio_replacements=replacements),
+            on_progress,
+        )
 
     bdmv_dir = output_dir / "BDMV"
     size = verify_output(bdmv_dir, info, media)

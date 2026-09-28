@@ -28,6 +28,12 @@ def test_probe_compliant_file(good_mkv):
     assert (audio.codec, audio.channels, audio.sample_rate) == ("ac3", 2, 48000)
 
 
+def test_probe_reports_stream_start_times(make_mkv):
+    info = probe(make_mkv("late.mkv", acodec="ac3", audio_offset=0.5))
+    assert info.video[0].start_time == pytest.approx(0.0, abs=0.01)
+    assert info.audio[0].start_time == pytest.approx(0.5, abs=0.01)
+
+
 def test_probe_reports_cropped_resolution(make_mkv):
     (video,) = probe(make_mkv("scope.mkv", width=1920, height=800)).video
     assert (video.width, video.height) == (1920, 800)

@@ -6,10 +6,11 @@ import shlex
 import subprocess
 import tempfile
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from bdauthor.model import Chapter, MediaInfo
+from bdauthor.model import AudioStream, Chapter, MediaInfo
 from bdauthor.mux.base import MuxError, MuxRequest, ProgressCallback
 
 log = logging.getLogger(__name__)
@@ -18,7 +19,10 @@ _PROGRESS = re.compile(r"^\s*(\d+(?:\.\d+)?)% complete")
 _SUCCESS = "Mux successful complete"
 _MUXOPT = "--no-pcr-on-video-pid --new-audio-pes --blu-ray --vbr"
 _H264 = "V_MPEG4/ISO/AVC"
+_AC3 = "A_AC3"
 _KINDS = {"V": "video", "A": "audio", "S": "subtitle"}
+# tsMuxeR stream id that reads each probe audio codec; codecs missing here (flac, opus...) are not listed.
+_AUDIO_FAMILY = {"aac": "A_AAC", "mp3": "A_MP3", "ac3": _AC3, "eac3": _AC3, "truehd": _AC3, "dts": "A_DTS"}
 
 
 @dataclass(frozen=True)
@@ -32,6 +36,15 @@ class Track:
     @property
     def kind(self) -> str | None:
         return _KINDS.get(self.stream_id[:1])
+
+
+@dataclass(frozen=True)
+class Entry:
+    """One line of the meta file: a track of a file, optionally shifted in time."""
+
+    path: Path
+    track: Track
+    timeshift_ms: int = 0
 
 
 def parse_tracks(output: str) -> list[Track]:
@@ -66,30 +79,90 @@ def _chapter_option(chapters: tuple[Chapter, ...]) -> str:
     return " --custom-chapters=" + ";".join(_timestamp(ms / 1000) for ms in starts)
 
 
-def build_meta(source: Path, tracks: list[Track], chapters: tuple[Chapter, ...] = ()) -> str:
-    """Render the tsMuxeR meta file that remuxes every track of `source` to a BD folder."""
-    if '"' in str(source):
-        raise MuxError(f"file names containing double quotes are not supported: {source}")
-
+def build_meta(entries: list[Entry], chapters: tuple[Chapter, ...] = ()) -> str:
+    """Render the tsMuxeR meta file: one line per entry, in order."""
     lines = [f"MUXOPT {_MUXOPT}{_chapter_option(chapters)}"]
-    for track in tracks:
+    for entry in entries:
+        track = entry.track
+        if '"' in str(entry.path):
+            raise MuxError(f"file names containing double quotes are not supported: {entry.path}")
         params = [f"track={track.id}"]
         if track.stream_id == _H264:
             params = ["insertSEI", "contSPS", *params]
         if track.language and len(track.language) == 3:
             params.append(f"lang={track.language}")
-        lines.append(f'{track.stream_id}, "{source}", {", ".join(params)}')
+        if entry.timeshift_ms:
+            params.append(f"timeshift={entry.timeshift_ms}ms")
+        lines.append(f'{track.stream_id}, "{entry.path}", {", ".join(params)}')
     return "\n".join(lines) + "\n"
 
 
-def _check_tracks(tracks: list[Track], info: MediaInfo) -> None:
+def _audio_family(codec: str) -> str | None:
+    return "A_LPCM" if codec.startswith("pcm_") else _AUDIO_FAMILY.get(codec)
+
+
+def _mismatch(tracks: list[Track], info: MediaInfo) -> MuxError:
+    found = {kind: sum(1 for t in tracks if t.kind == kind) for kind in _KINDS.values()}
     expected = {"video": len(info.video), "audio": len(info.audio), "subtitle": len(info.subtitles)}
-    found = {kind: sum(1 for t in tracks if t.kind == kind) for kind in expected}
-    if found != expected:
-        raise MuxError(
-            "tsMuxeR detected different tracks than the probe "
-            f"(tsMuxeR: {found}, probe: {expected}); refusing to guess which to mux"
-        )
+    return MuxError(
+        "tsMuxeR detected different tracks than the probe "
+        f"(tsMuxeR: {found}, probe: {expected}); refusing to guess which to mux"
+    )
+
+
+def _check_tracks(tracks: list[Track], info: MediaInfo) -> None:
+    """Video and subtitle tracks must match the probe one to one."""
+    for kind, count in (("video", len(info.video)), ("subtitle", len(info.subtitles))):
+        if sum(1 for t in tracks if t.kind == kind) != count:
+            raise _mismatch(tracks, info)
+
+
+def _timeshift_ms(stream: AudioStream, info: MediaInfo) -> int:
+    """Audio delay relative to the video, which tsMuxeR ignores when reading an mkv."""
+    if not info.video or info.video[0].start_time is None or stream.start_time is None:
+        return 0
+    return round((stream.start_time - info.video[0].start_time) * 1000)
+
+
+def plan_tracks(
+    tracks: list[Track], info: MediaInfo, replacements: Mapping[int, tuple[Path, Track]]
+) -> list[Entry]:
+    """Pair every detected track with its file, swapping in the replaced audio streams.
+
+    Audio tracks are matched to probe audio streams in order; a replaced stream's detected
+    track (if tsMuxeR can read that codec at all) is dropped in favour of the replacement.
+    Audio entries carry the delay the source had relative to the video.
+    """
+    source = info.path.resolve()
+    detected_audio = iter([t for t in tracks if t.kind == "audio"])
+    audio_entries: list[Entry] = []
+    for stream in info.audio:
+        family = _audio_family(stream.codec)
+        detected = next(detected_audio, None) if family else None
+        shift = _timeshift_ms(stream, info)
+        if stream.index in replacements:
+            if family and (detected is None or detected.stream_id != family):
+                raise _mismatch(tracks, info)
+            path, track = replacements[stream.index]
+            audio_entries.append(Entry(path, track, shift))
+        elif detected is None:
+            raise _mismatch(tracks, info)
+        else:
+            audio_entries.append(Entry(source, detected, shift))
+    if next(detected_audio, None) is not None:
+        raise _mismatch(tracks, info)
+
+    entries: list[Entry] = []
+    audio_placed = False
+    for track in tracks:
+        if track.kind != "audio":
+            entries.append(Entry(source, track))
+        elif not audio_placed:
+            entries.extend(audio_entries)
+            audio_placed = True
+    if not audio_placed:
+        entries.extend(audio_entries)
+    return entries
 
 
 class TsMuxer:
@@ -107,12 +180,21 @@ class TsMuxer:
             raise MuxError(f"tsMuxeR failed to read {source}:\n{result.stdout}{result.stderr}".strip())
         return parse_tracks(result.stdout)
 
+    def _detect_replacement(self, path: Path) -> tuple[Path, Track]:
+        audio = [t for t in self.detect(path) if t.kind == "audio"]
+        if len(audio) != 1 or audio[0].stream_id != _AC3:
+            raise MuxError(f"expected exactly one AC3 track in {path}, found {audio}")
+        return path.resolve(), audio[0]
+
     def mux(self, request: MuxRequest, on_progress: ProgressCallback | None = None) -> None:
         info = request.info
-        source = info.path.resolve()
-        tracks = self.detect(source)
+        tracks = self.detect(info.path.resolve())
         _check_tracks(tracks, info)
-        meta = build_meta(source, tracks, info.chapters)
+        replacements = {
+            index: self._detect_replacement(path)
+            for index, path in request.audio_replacements.items()
+        }
+        meta = build_meta(plan_tracks(tracks, info, replacements), info.chapters)
         log.debug("meta file:\n%s", meta.rstrip())
 
         with tempfile.TemporaryDirectory(prefix="bdauthor-") as tmp:

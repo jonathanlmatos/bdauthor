@@ -4,8 +4,16 @@ import pytest
 
 from bdauthor.model import Chapter
 from bdauthor.mux.base import MuxError, MuxRequest
-from bdauthor.mux.tsmuxer import Track, TsMuxer, _check_tracks, build_meta, parse_tracks
-from tests.builders import audio, media_info, subtitle
+from bdauthor.mux.tsmuxer import (
+    Entry,
+    Track,
+    TsMuxer,
+    _check_tracks,
+    build_meta,
+    parse_tracks,
+    plan_tracks,
+)
+from tests.builders import audio, media_info, subtitle, video
 
 DETECT_OUTPUT = """\
 tsMuxeR version 2.7.0. github.com/justdan96/tsMuxer
@@ -35,6 +43,7 @@ SOURCE = Path("/media/movie.mkv")
 VIDEO = Track(1, "V_MPEG4/ISO/AVC", "und")
 AUDIO = Track(2, "A_AC3", "por")
 SUBTITLE = Track(3, "S_HDMV/PGS", None)
+ENTRIES = [Entry(SOURCE, VIDEO), Entry(SOURCE, AUDIO), Entry(SOURCE, SUBTITLE)]
 
 
 def test_parse_tracks_reads_ids_stream_ids_and_languages():
@@ -60,7 +69,7 @@ def test_build_meta_lists_every_track_with_chapters():
         Chapter(600.5, 700.0, "b"),
         Chapter(3661.001, 4000.0, None),
     )
-    meta = build_meta(SOURCE, [VIDEO, AUDIO, SUBTITLE], chapters)
+    meta = build_meta(ENTRIES, chapters)
     assert meta.splitlines() == [
         "MUXOPT --no-pcr-on-video-pid --new-audio-pes --blu-ray --vbr "
         "--custom-chapters=00:00:00.000;00:10:00.500;01:01:01.001",
@@ -71,18 +80,18 @@ def test_build_meta_lists_every_track_with_chapters():
 
 
 def test_build_meta_adds_a_chapter_at_zero_when_the_first_one_starts_later():
-    meta = build_meta(SOURCE, [VIDEO], (Chapter(5.0, 9.0, None),))
+    meta = build_meta([Entry(SOURCE, VIDEO)], (Chapter(5.0, 9.0, None),))
     assert "--custom-chapters=00:00:00.000;00:00:05.000" in meta
 
 
 @pytest.mark.parametrize("chapters", [(), (Chapter(0.0, 100.0, "only"),)])
 def test_build_meta_omits_chapters_when_there_is_nothing_to_split(chapters):
-    assert "--custom-chapters" not in build_meta(SOURCE, [VIDEO], chapters)
+    assert "--custom-chapters" not in build_meta([Entry(SOURCE, VIDEO)], chapters)
 
 
 def test_build_meta_rejects_double_quotes_in_the_path():
     with pytest.raises(MuxError):
-        build_meta(Path('/media/my "movie".mkv'), [VIDEO])
+        build_meta([Entry(Path('/media/my "movie".mkv'), VIDEO)])
 
 
 def test_check_tracks_accepts_matching_counts():
@@ -92,13 +101,111 @@ def test_check_tracks_accepts_matching_counts():
 @pytest.mark.parametrize(
     "info",
     [
-        media_info(audios=(audio(), audio(index=2))),  # probe sees one more audio
+        media_info(videos=(video(), video(index=5))),  # probe sees a second video stream
         media_info(subtitles=(subtitle(),)),  # probe sees a subtitle tsMuxeR did not list
     ],
 )
 def test_check_tracks_refuses_to_guess_on_mismatch(info):
     with pytest.raises(MuxError, match="refusing to guess"):
         _check_tracks([VIDEO, AUDIO], info)
+
+
+# --- plan_tracks: which file/track each meta line uses ---------------------
+
+AAC = Track(2, "A_AAC", "por")
+DTS = Track(3, "A_DTS", "eng")
+REPLACEMENT = (Path("/tmp/audio-1.mkv"), Track(1, "A_AC3", "por"))
+AAC_INFO = media_info(audios=(audio(index=1, codec="aac"),))
+
+
+def test_plan_tracks_without_replacements_keeps_detection_order():
+    info = media_info(audios=(audio(),), subtitles=(subtitle(),))
+    source = info.path.resolve()
+    assert plan_tracks([VIDEO, AUDIO, SUBTITLE], info, {}) == [
+        Entry(source, VIDEO),
+        Entry(source, AUDIO),
+        Entry(source, SUBTITLE),
+    ]
+
+
+def test_plan_tracks_swaps_a_replaced_audio_track_in_place():
+    source = AAC_INFO.path.resolve()
+    entries = plan_tracks([VIDEO, AAC], AAC_INFO, {1: REPLACEMENT})
+    assert entries == [Entry(source, VIDEO), Entry(*REPLACEMENT)]
+
+
+def test_plan_tracks_keeps_the_audio_order_of_the_probe():
+    info = media_info(audios=(audio(index=1), audio(index=2, codec="aac")))
+    source = info.path.resolve()
+    entries = plan_tracks([VIDEO, AUDIO, Track(3, "A_AAC", "eng")], info, {2: REPLACEMENT})
+    assert entries == [Entry(source, VIDEO), Entry(source, AUDIO), Entry(*REPLACEMENT)]
+
+
+def test_plan_tracks_replaced_stream_that_tsmuxer_cannot_read_is_not_detected():
+    info = media_info(audios=(audio(index=1, codec="flac"),))
+    entries = plan_tracks([VIDEO], info, {1: REPLACEMENT})
+    assert entries == [Entry(info.path.resolve(), VIDEO), Entry(*REPLACEMENT)]
+
+
+def test_plan_tracks_refuses_when_the_detected_track_is_another_codec():
+    with pytest.raises(MuxError, match="refusing to guess"):
+        plan_tracks([VIDEO, AUDIO], AAC_INFO, {1: REPLACEMENT})  # detected A_AC3, probe says aac
+
+
+def test_plan_tracks_refuses_unaccounted_detected_audio():
+    with pytest.raises(MuxError, match="refusing to guess"):
+        plan_tracks([VIDEO, AUDIO, DTS], media_info(audios=(audio(),)), {})
+
+
+def test_plan_tracks_refuses_when_an_audio_track_is_missing():
+    with pytest.raises(MuxError, match="refusing to guess"):
+        plan_tracks([VIDEO], media_info(audios=(audio(),)), {})
+
+
+# --- audio delay -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("video_start", "audio_start", "shift_ms"),
+    [
+        (0.0, 0.0, 0),
+        (0.0, 0.5, 500),
+        (0.0, 0.0004, 0),  # below 1 ms: nothing to correct
+        (0.042, 0.0, -42),
+        (1.0, 1.15, 150),  # only the difference matters, not the absolute start
+        (None, 0.5, 0),  # unknown start times: leave alone
+        (0.0, None, 0),
+    ],
+)
+def test_plan_tracks_shifts_audio_by_its_delay_relative_to_the_video(video_start, audio_start, shift_ms):
+    info = media_info(
+        videos=(video(start_time=video_start),), audios=(audio(index=1, start_time=audio_start),)
+    )
+    entries = plan_tracks([VIDEO, AUDIO], info, {})
+    assert entries[0].timeshift_ms == 0  # video is the reference
+    assert entries[1].timeshift_ms == shift_ms
+
+
+def test_plan_tracks_applies_the_source_delay_to_the_replacement_too():
+    info = media_info(
+        videos=(video(start_time=0.0),), audios=(audio(index=1, codec="aac", start_time=0.5),)
+    )
+    entries = plan_tracks([VIDEO, AAC], info, {1: REPLACEMENT})
+    assert entries[1] == Entry(*REPLACEMENT, timeshift_ms=500)
+
+
+def test_build_meta_writes_timeshift_only_when_there_is_one():
+    meta = build_meta(
+        [
+            Entry(SOURCE, VIDEO),
+            Entry(SOURCE, AUDIO, timeshift_ms=-42),
+            Entry(SOURCE, Track(4, "A_DTS", None), timeshift_ms=0),
+        ]
+    )
+    assert meta.splitlines()[2:] == [
+        'A_AC3, "/media/movie.mkv", track=2, lang=por, timeshift=-42ms',
+        'A_DTS, "/media/movie.mkv", track=4',
+    ]
 
 
 def fake_tsmuxer(tmp_path: Path, *, mux_output: str, exit_code: int = 0) -> Path:

@@ -7,6 +7,7 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
 from rich.text import Text
 
 from bdauthor.build import BuildError, CheckFailed, build_disc
+from bdauthor.cli._options import MediaOption, TranscodeAudioOption
 from bdauthor.cli._report import print_report
 from bdauthor.deps import TSMUXER_HINT, find_tsmuxer
 from bdauthor.exitcodes import ExitCode
@@ -14,6 +15,7 @@ from bdauthor.model import Media
 from bdauthor.mux.base import MuxError
 from bdauthor.mux.tsmuxer import TsMuxer
 from bdauthor.probe import ProbeError
+from bdauthor.transcode import TranscodeError
 
 out = Console()
 err = Console(stderr=True)
@@ -31,22 +33,26 @@ def build(
     output: Annotated[
         Path, typer.Option("--output", "-o", help="Directory where BDMV/ is created.")
     ],
-    media: Annotated[
-        Media, typer.Option("--media", "-m", help="Target disc; sets the capacity budget.")
-    ] = Media.BD25,
+    media: MediaOption = Media.BD25,
+    transcode_audio: TranscodeAudioOption = False,
     force: Annotated[
         bool, typer.Option("--force", help="Replace an existing BDMV/ in the output directory.")
     ] = False,
 ) -> None:
-    """Remux a compatible media file into a BDMV directory (no re-encoding)."""
+    """Remux a compatible media file into a BDMV directory (video is never re-encoded)."""
     tsmuxer = find_tsmuxer()
     if tsmuxer is None:
         raise _fail(f"tsMuxeR not found. {TSMUXER_HINT}", ExitCode.MISSING_DEPENDENCY)
 
     progress = Progress(
-        TextColumn("Muxing"), BarColumn(), TaskProgressColumn(), console=err, transient=True
+        TextColumn("{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=err,
+        transient=True,
     )
-    task = progress.add_task("mux", total=100)
+    transcode_task = progress.add_task("Re-encoding audio", total=100, visible=False)
+    mux_task = progress.add_task("Muxing", total=100, visible=False)
     try:
         with progress:
             result = build_disc(
@@ -55,14 +61,18 @@ def build(
                 media,
                 TsMuxer(tsmuxer),
                 force=force,
-                on_progress=lambda percent: progress.update(task, completed=percent),
+                transcode_audio=transcode_audio,
+                on_progress=lambda percent: progress.update(mux_task, completed=percent, visible=True),
+                on_transcode_progress=lambda percent: progress.update(
+                    transcode_task, completed=percent, visible=True
+                ),
             )
     except ProbeError as exc:
         raise _fail(str(exc), ExitCode.CHECK_FAILED) from exc
     except CheckFailed as exc:
         print_report(exc.report, out, name=file.name)
         raise typer.Exit(ExitCode.CHECK_FAILED) from exc
-    except (BuildError, MuxError) as exc:
+    except (BuildError, MuxError, TranscodeError) as exc:
         raise _fail(str(exc), ExitCode.BUILD_FAILED) from exc
 
     print_report(result.report, out, name=file.name)

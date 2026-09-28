@@ -60,3 +60,27 @@ def test_check_unreadable_file_exits_with_check_failed(tmp_path):
     path = tmp_path / "notes.mkv"
     path.write_text("not media")
     assert runner.invoke(app, ["check", str(path)]).exit_code == ExitCode.CHECK_FAILED
+
+
+def test_check_transcode_audio_turns_the_audio_error_into_a_warning(make_mkv):
+    path = str(make_mkv("aac.mkv", acodec="aac"))
+    assert runner.invoke(app, ["check", path]).exit_code == ExitCode.CHECK_FAILED
+
+    result = runner.invoke(app, ["check", path, "--transcode-audio"])
+    assert result.exit_code == ExitCode.OK
+    assert "will be re-encoded from aac" in result.stdout
+    assert "PASSED: 0 error(s), 1 warning(s)" in result.stdout
+
+
+def test_check_transcode_audio_does_not_hide_other_problems(make_mkv):
+    path = make_mkv("scope-aac.mkv", acodec="aac", width=1920, height=800)
+    result = runner.invoke(app, ["check", str(path), "--transcode-audio"])
+    assert result.exit_code == ExitCode.CHECK_FAILED
+    assert "1920x800" in result.stdout
+
+
+def test_check_transcode_audio_json_lists_the_warning(make_mkv):
+    path = str(make_mkv("aac.mkv", acodec="aac"))
+    data = json.loads(runner.invoke(app, ["check", path, "--transcode-audio", "--json"]).stdout)
+    assert data["passed"] is True
+    assert [f["severity"] for f in data["findings"] if f["rule"] == "audio"] == ["warning", "ok"]

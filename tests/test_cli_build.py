@@ -55,3 +55,19 @@ def test_build_requires_an_output_directory(good_mkv):
 def test_build_rejects_unknown_media(good_mkv, tmp_path):
     result = runner.invoke(app, ["build", str(good_mkv), "-o", str(tmp_path), "-m", "cd"])
     assert result.exit_code == 2
+
+
+def test_build_transcode_audio_re_encodes_incompatible_audio(make_mkv, tmp_path, tsmuxer):
+    source = str(make_mkv("aac.mkv", acodec="aac"))
+    out = tmp_path / "disc"
+
+    refused = runner.invoke(app, ["build", source, "-o", str(out)])
+    assert refused.exit_code == ExitCode.CHECK_FAILED
+    assert not out.exists()
+
+    result = runner.invoke(app, ["build", source, "-o", str(out), "--transcode-audio"])
+    assert result.exit_code == ExitCode.OK, result.output
+    assert "will be re-encoded from aac" in result.stdout
+    assert "Built" in result.stdout
+    for name in REQUIRED_FILES:
+        assert (out / "BDMV" / name).is_file(), name
