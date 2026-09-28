@@ -5,6 +5,7 @@ from pathlib import Path
 
 import av
 
+from bdauthor.menu.ig import pgs_carrier
 from bdauthor.model import VideoStream
 from bdauthor.mux.base import Muxer, MuxRequest
 from bdauthor.probe import probe
@@ -39,11 +40,17 @@ def write_black_video(dest: Path, video: VideoStream, seconds: int = MENU_SECOND
             out.mux(packet)
 
 
-def mux_black_clip(muxer: Muxer, video: VideoStream, work_dir: Path) -> Path:
-    """Mux the black video into `work_dir`; returns the BDMV directory the muxer wrote."""
+def mux_menu_clip(muxer: Muxer, video: VideoStream, segments: list[bytes], work_dir: Path) -> Path:
+    """Mux the black video and the IG `segments` into `work_dir`; returns the BDMV directory written.
+
+    The graphics come out as a presentation graphics stream (see `pgs_carrier`) and still have to
+    be converted with `convert_graphics_to_interactive`.
+    """
     source = work_dir / "menu-background.mkv"
     write_black_video(source, video)
+    graphics = work_dir / "menu-graphics.sup"
+    graphics.write_bytes(pgs_carrier(segments))
     output = work_dir / "menu-disc"
     output.mkdir()
-    muxer.mux(MuxRequest(info=probe(source), output_dir=output))
+    muxer.mux(MuxRequest(info=probe(source), output_dir=output, graphics=(graphics,)))
     return output / "BDMV"

@@ -11,7 +11,13 @@ import pytest
 
 from bdauthor.navigation import write_navigation
 from bdauthor.navigation.index import Access, HdmvRef, IndexTable, PlaybackType, Title
-from bdauthor.navigation.playlist import PlaylistError, clip_ids, retarget_playlist
+from bdauthor.navigation.clip_info import ClipInfoError, program_map_pid, relabel_stream
+from bdauthor.navigation.playlist import (
+    PlaylistError,
+    clip_ids,
+    relabel_graphics_as_interactive,
+    retarget_playlist,
+)
 from bdauthor.navigation.movie_object import (
     Compare,
     MovieObject,
@@ -285,3 +291,56 @@ def test_retarget_playlist_refuses_sub_paths_and_garbage(tsmuxer_disc):
         clip_ids(b"NOPE" * 10)
     with pytest.raises(PlaylistError, match="truncated"):
         clip_ids(bytes(data[: list_pos + 4]))
+
+
+# --- clip info and the graphics stream of a playlist ----------------------------------------------
+
+_RELABEL = {"old_pid": 0x1200, "new_pid": 0x1400, "old_coding": 0x90, "new_coding": 0x91}
+
+
+def test_program_map_pid_of_a_muxed_clip(muxed_menu):
+    bdmv, _ = muxed_menu
+    assert program_map_pid((bdmv / "CLIPINF" / "00000.clpi").read_bytes()) == 0x100
+
+
+def test_relabel_stream_changes_only_the_pid_and_coding_type(muxed_menu):
+    bdmv, _ = muxed_menu
+    data = (bdmv / "CLIPINF" / "00000.clpi").read_bytes()
+    patched = relabel_stream(data, **_RELABEL)
+    assert len(patched) == len(data)
+    changed = [i for i, (a, b) in enumerate(zip(data, patched)) if a != b]
+    assert len(changed) == 2  # 0x12 -> 0x14 (PID) and 0x90 -> 0x91 (coding type)
+
+
+def test_relabel_stream_refuses_a_stream_that_is_not_there(muxed_menu):
+    bdmv, _ = muxed_menu
+    data = (bdmv / "CLIPINF" / "00000.clpi").read_bytes()
+    with pytest.raises(ClipInfoError, match="no stream"):
+        relabel_stream(data, **{**_RELABEL, "old_pid": 0x1300})
+    with pytest.raises(ClipInfoError, match="not a clip info"):
+        relabel_stream(b"MPLS" * 10, **_RELABEL)
+    with pytest.raises(ClipInfoError, match="truncated"):
+        relabel_stream(data[:20], **_RELABEL)
+
+
+def test_relabelled_playlist_lists_an_interactive_stream_for_libbluray(muxed_menu, libbluray_tool, tmp_path):
+    bdmv, _ = muxed_menu
+    data = (bdmv / "PLAYLIST" / "00000.mpls").read_bytes()
+    path = tmp_path / "00000.mpls"
+    path.write_bytes(relabel_graphics_as_interactive(data, **_RELABEL))
+    out = subprocess.run([str(libbluray_tool("mpls_dump")), "-i", str(path)], capture_output=True, text=True).stdout
+    assert "Interactive Graphics Stream 0" in out and "Codec (0091)" in out and "PID: 1400" in out
+    assert "Presentation Graphics Stream" not in out
+
+
+def test_relabel_playlist_refuses_a_playlist_without_graphics(tsmuxer_disc):
+    data = (tsmuxer_disc / "BDMV" / "PLAYLIST" / "00000.mpls").read_bytes()
+    with pytest.raises(PlaylistError, match="exactly one"):
+        relabel_graphics_as_interactive(data, **_RELABEL)
+
+
+def test_relabel_playlist_refuses_another_stream(muxed_menu):
+    bdmv, _ = muxed_menu
+    data = (bdmv / "PLAYLIST" / "00000.mpls").read_bytes()
+    with pytest.raises(PlaylistError, match="not the expected"):
+        relabel_graphics_as_interactive(data, **{**_RELABEL, "old_pid": 0x1300})

@@ -27,6 +27,8 @@ jobs:
     # An older glibc than the developer machines, so the binaries run on newer systems too.
     runs-on: ubuntu-22.04
     steps:
+      - uses: actions/checkout@v4
+
       - name: Install build tools
         run: pip install meson ninja
 
@@ -48,6 +50,10 @@ jobs:
                       examples/index_dump examples/sound_dump tools/bd_info tools/bd_list_titles; do
             install -m 755 "libbluray/build/src/$tool" stage/bin/
           done
+          # our own oracle: plays the disc from the start, so the menu is actually drawn
+          gcc -O2 -Wall -o stage/bin/bd_menu_test tools/oracle/bd_menu_test.c \
+            -I libbluray/src -I libbluray/src/libbluray -I libbluray/build/src/libbluray \
+            libbluray/build/src/libbluray.a libbluray/build/contrib/libudfread/src/libudfread.a -ldl -lpthread
           strip stage/bin/*
           cp libbluray/COPYING stage/COPYING
           echo "libbluray $LIBBLURAY_TAG, built from $LIBBLURAY_URL" > stage/SOURCE.txt
@@ -68,12 +74,12 @@ jobs:
       - name: Publish the release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}  # this job does not check out the repository
+          GH_REPO: ${{ github.repository }}
         run: |
           cat > notes.md <<EOF
           Development tools for BDAuthor, downloaded by scripts/bootstrap.py (not a BDAuthor release).
 
-          - libbluray ${LIBBLURAY_TAG} (LGPL-2.1), built from ${LIBBLURAY_URL} at that tag: hdmv_test, mobj_dump, mpls_dump, clpi_dump, index_dump, sound_dump, bd_info, bd_list_titles.
+          - libbluray ${LIBBLURAY_TAG} (LGPL-2.1), built from ${LIBBLURAY_URL} at that tag: hdmv_test, mobj_dump, mpls_dump, clpi_dump, index_dump, sound_dump, bd_info, bd_list_titles, plus bd_menu_test (BDAuthor's own tool, tools/oracle/bd_menu_test.c).
           - tsMuxeR ${TSMUXER_VERSION} (LGPL-2.1), unmodified copy of the upstream release: https://github.com/justdan96/tsMuxer/releases/tag/${TSMUXER_VERSION}
           EOF
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \

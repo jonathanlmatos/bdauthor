@@ -157,6 +157,20 @@ def tsmuxer_disc(good_mkv, tmp_path_factory, tsmuxer) -> Path:
 
 
 @pytest.fixture(scope="session")
+def muxed_menu(tmp_path_factory, tsmuxer):
+    from bdauthor.menu.background import mux_menu_clip
+    from bdauthor.menu.simple import simple_menu
+    from bdauthor.mux.tsmuxer import TsMuxer
+    from tests.builders import video
+
+    """The menu clip as tsMuxeR writes it (graphics still labelled PGS) and the segments that went in."""
+    graphics = simple_menu(video(width=1280, height=720))
+    work = tmp_path_factory.mktemp("muxed_menu")
+    bdmv = mux_menu_clip(TsMuxer(tsmuxer), video(width=1280, height=720), graphics.segments(), work)
+    return bdmv, graphics.segments()
+
+
+@pytest.fixture(scope="session")
 def good_mkv(make_mkv) -> Path:
     """A BD-compatible 1080p23.976 H.264 + AC3 file."""
     return make_mkv("good.mkv")

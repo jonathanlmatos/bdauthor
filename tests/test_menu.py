@@ -11,6 +11,7 @@ import pytest
 from bdauthor.menu import MENU_CLIP, MenuError, add_menu
 from bdauthor.menu.background import MENU_SECONDS, write_black_video
 from bdauthor.menu.programs import menu_navigation
+from bdauthor.menu.simple import simple_menu
 from bdauthor.model import VideoStream
 from bdauthor.mux.tsmuxer import TsMuxer
 from bdauthor.probe import probe
@@ -161,3 +162,63 @@ def test_adding_a_menu_twice_is_refused(disc_with_menu, tsmuxer):
     movie = probe(disc_with_menu / "BDMV" / "STREAM" / "00000.m2ts").video[0]
     with pytest.raises(MenuError, match="already exists"):
         add_menu(disc_with_menu / "BDMV", movie, TsMuxer(tsmuxer))
+
+
+# --- the interactive graphics of the menu, as libbluray plays them --------------------------------
+
+
+def play_disc(libbluray_tool, disc, *keys):
+    """Run bd_menu_test on `disc`, pressing `keys` once the menu is on screen; returns its output lines."""
+    command = [str(libbluray_tool("bd_menu_test"))]
+    if keys:
+        command += ["-k", ",".join(keys)]
+    result = subprocess.run([*command, str(disc)], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.splitlines()
+
+
+def test_libbluray_lists_an_interactive_graphics_stream_in_the_menu_clip(disc_with_menu, libbluray_tool):
+    bdmv = disc_with_menu / "BDMV"
+    playlist = subprocess.run(
+        [str(libbluray_tool("mpls_dump")), "-i", str(bdmv / "PLAYLIST" / f"{MENU_CLIP}.mpls")],
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "Interactive Graphics Stream 0" in playlist and "PID: 1400" in playlist
+    clip = subprocess.run(
+        [str(libbluray_tool("clpi_dump")), "-p", str(bdmv / "CLIPINF" / f"{MENU_CLIP}.clpi")],
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "Codec (0091): Interactive Graphics" in clip
+
+
+def test_the_menu_is_drawn_where_the_button_was_placed(disc_with_menu, libbluray_tool):
+    movie = probe(disc_with_menu / "BDMV" / "STREAM" / "00000.m2ts").video[0]
+    graphics = simple_menu(movie)
+    button = graphics.composition.pages[0].buttons[0]
+    image = graphics.images[0]
+
+    lines = play_disc(libbluray_tool, disc_with_menu)
+    assert f"OVERLAY plane=IG cmd=INIT pts=-1 x=0 y=0 w={movie.width} h={movie.height}" in lines
+    draws = [line for line in lines if line.startswith("OVERLAY plane=IG cmd=DRAW")]
+    expected = f"x={button.x} y={button.y} w={image.width} h={image.height}"
+    assert draws and all(line.endswith(expected) for line in draws)  # the Play button
+    assert "EVENT MENU 1" in lines
+    assert "EVENT TITLE 1" not in lines  # nothing starts the movie by itself
+
+
+def test_the_menu_starts_before_the_movie_and_plays_its_own_playlist(disc_with_menu, libbluray_tool):
+    lines = play_disc(libbluray_tool, disc_with_menu)
+    assert lines.index("EVENT TITLE 0") < lines.index("EVENT PLAYLIST 1")  # top menu, then the menu playlist
+    assert "EVENT PLAYLIST 0" not in lines
+
+
+def test_pressing_enter_on_play_starts_the_movie_and_closes_the_menu(disc_with_menu, libbluray_tool):
+    lines = play_disc(libbluray_tool, disc_with_menu, "enter")
+    key = lines.index("KEY enter")
+    after = lines[key:]
+    assert "EVENT TITLE 1" in after  # the button jumps to title 1
+    assert "EVENT PLAYLIST 0" in after  # ... which plays the movie's playlist
+    assert "EVENT MENU 0" in after  # and the menu goes away
+    assert after.index("EVENT TITLE 1") < after.index("EVENT PLAYLIST 0")

@@ -4,12 +4,15 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from bdauthor.menu.background import MenuError, mux_black_clip
+from bdauthor.bdav import IG_PID, IG_STREAM_TYPE, PGS_PID, PGS_STREAM_TYPE, BdavError, convert_graphics_to_interactive
+from bdauthor.menu.background import MenuError, mux_menu_clip
 from bdauthor.menu.programs import menu_navigation
+from bdauthor.menu.simple import MenuGraphicsError, simple_menu
 from bdauthor.model import VideoStream
 from bdauthor.mux.base import Muxer
 from bdauthor.navigation import write_navigation
-from bdauthor.navigation.playlist import PlaylistError, retarget_playlist
+from bdauthor.navigation.clip_info import ClipInfoError, program_map_pid, relabel_stream
+from bdauthor.navigation.playlist import PlaylistError, relabel_graphics_as_interactive, retarget_playlist
 
 __all__ = ["MenuError", "add_menu"]
 
@@ -18,34 +21,45 @@ _MOVIE_CLIP = "00000"
 
 
 def _copy_menu_clip(menu_bdmv: Path, bdmv_dir: Path) -> None:
-    """Copy the muxed black clip into the disc as clip MENU_CLIP (stream, clip info, playlist)."""
-    for folder, suffix in (("STREAM", "m2ts"), ("CLIPINF", "clpi")):
-        target = bdmv_dir / folder / f"{MENU_CLIP}.{suffix}"
+    """Copy the muxed menu clip into the disc as clip MENU_CLIP (stream, clip info, playlist).
+
+    On the way, the graphics stream tsMuxeR wrote as PGS becomes an interactive graphics stream.
+    """
+    targets = {
+        folder: bdmv_dir / folder / f"{MENU_CLIP}.{suffix}"
+        for folder, suffix in (("STREAM", "m2ts"), ("CLIPINF", "clpi"), ("PLAYLIST", "mpls"))
+    }
+    for target in targets.values():
         if target.exists():
             raise MenuError(f"{target} already exists")
-        shutil.copyfile(menu_bdmv / folder / f"{_MOVIE_CLIP}.{suffix}", target)
-    playlist = bdmv_dir / "PLAYLIST" / f"{MENU_CLIP}.mpls"
-    if playlist.exists():
-        raise MenuError(f"{playlist} already exists")
+
+    relabel = {"old_pid": PGS_PID, "new_pid": IG_PID, "old_coding": PGS_STREAM_TYPE, "new_coding": IG_STREAM_TYPE}
     try:
-        playlist.write_bytes(
-            retarget_playlist((menu_bdmv / "PLAYLIST" / f"{_MOVIE_CLIP}.mpls").read_bytes(), _MOVIE_CLIP, MENU_CLIP)
-        )
-    except PlaylistError as exc:
-        raise MenuError(f"could not use the menu playlist: {exc}") from exc
-    for folder, suffix in (("CLIPINF", "clpi"), ("PLAYLIST", "mpls")):  # BACKUP/ mirrors both
-        shutil.copyfile(
-            bdmv_dir / folder / f"{MENU_CLIP}.{suffix}", bdmv_dir / "BACKUP" / folder / f"{MENU_CLIP}.{suffix}"
-        )
+        clip_info = (menu_bdmv / "CLIPINF" / f"{_MOVIE_CLIP}.clpi").read_bytes()
+        targets["CLIPINF"].write_bytes(relabel_stream(clip_info, **relabel))
+        playlist = (menu_bdmv / "PLAYLIST" / f"{_MOVIE_CLIP}.mpls").read_bytes()
+        playlist = relabel_graphics_as_interactive(retarget_playlist(playlist, _MOVIE_CLIP, MENU_CLIP), **relabel)
+        targets["PLAYLIST"].write_bytes(playlist)
+        shutil.copyfile(menu_bdmv / "STREAM" / f"{_MOVIE_CLIP}.m2ts", targets["STREAM"])
+        convert_graphics_to_interactive(targets["STREAM"], program_map_pid(clip_info))
+    except (ClipInfoError, PlaylistError, BdavError) as exc:
+        raise MenuError(f"could not use the menu clip: {exc}") from exc
+
+    for folder in ("CLIPINF", "PLAYLIST"):  # BACKUP/ mirrors both
+        shutil.copyfile(targets[folder], bdmv_dir / "BACKUP" / folder / targets[folder].name)
 
 
 def add_menu(bdmv_dir: Path, video: VideoStream, muxer: Muxer) -> None:
-    """Add a looping black menu to the disc in `bdmv_dir` and make it the first thing that plays.
+    """Add a looping menu with a Play button to the disc in `bdmv_dir`; it plays first.
 
     The movie (clip/playlist 00000, as written by the muxer) becomes title 1. `video` is the
     movie's video stream: the menu clip has its resolution and frame rate.
     """
+    try:
+        graphics = simple_menu(video)
+    except MenuGraphicsError as exc:
+        raise MenuError(str(exc)) from exc
     with tempfile.TemporaryDirectory(prefix="bdauthor-menu-") as tmp:
-        _copy_menu_clip(mux_black_clip(muxer, video, Path(tmp)), bdmv_dir)
+        _copy_menu_clip(mux_menu_clip(muxer, video, graphics.segments(), Path(tmp)), bdmv_dir)
     index, objects = menu_navigation(movie_playlist=int(_MOVIE_CLIP), menu_playlist=int(MENU_CLIP))
     write_navigation(bdmv_dir, index, objects)

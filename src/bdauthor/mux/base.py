@@ -18,6 +18,8 @@ class MuxRequest:
     output_dir: Path  # BDMV/ is created inside it
     # Probe audio-stream index -> audio-only file that replaces that stream.
     audio_replacements: Mapping[int, Path] = field(default_factory=dict)
+    # .sup files (presentation graphics) to mux as extra tracks, after the source's own tracks.
+    graphics: tuple[Path, ...] = ()
 
 
 class Muxer(Protocol):

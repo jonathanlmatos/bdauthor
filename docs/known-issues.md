@@ -48,19 +48,23 @@ mkv chapters become playlist marks (`--custom-chapters`). If the mkv has none, t
 
 ## Menu (Phase 2, in progress)
 
-### The menu has no buttons yet, so it cannot start the movie (open)
+### `add_menu` is not wired into `bdauthor build` yet (open)
 
-`add_menu` (M2) only adds a looping black menu clip and makes it the top menu; the movie is title 1, reachable with the remote's title/next keys but not from the menu itself. That is why it is not wired into `bdauthor build` yet: a disc with this menu and no button would confuse users. The IG stream with the Play button is milestone M3.
+The menu (Play button) works end to end in libbluray but the CLI does not offer it yet (milestone M6); use `bdauthor.menu.add_menu` from Python. Only one button exists; the chapters screen and a title are later milestones.
+
+### Interactive graphics are verified in libbluray only (open)
+
+`bd_menu_test` (libbluray) draws the button at the right place and ENTER starts the movie. Not yet opened in VLC or on a hardware player. Things a stricter player might reject, all unverified: the IG stream has PES timestamps with PTS only (no DTS), ICS reserved bits are 0 rather than 1, the PMT entry for the IG stream has no descriptors, and the menu clip has no audio.
 
 ### The menu clip is video only and progressive only (open)
 
-- The black clip has no audio stream. The spec does not require one, but a hardware player that dislikes silent menus would need a silent AC3 track added. Untested on hardware.
+- The black clip has no audio stream. The spec does not require one, but a hardware player that dislikes silent menus would need a silent AC3 track added.
 - Interlaced movies (1080i) are refused with a clear error; the black clip would need interlaced encoding.
 - The clip is 10 seconds; the menu playlist restarts when it ends, which can show a brief hitch on some players (a seamless loop needs a different playlist structure).
 
-### Verified so far
+### hdmv_test cannot see the menu
 
-libbluray (`hdmv_test`, `mpls_dump`, `clpi_dump`, `index_dump`, `mobj_dump`) reads the assembled disc and executes first playback -> top menu -> menu playlist in a loop. Not yet opened in VLC or on a hardware player.
+libbluray's `hdmv_test` seeks to the last 6 KB of each playlist before reading, so it never decodes the IG. Use `bd_menu_test` (`tools/oracle/bd_menu_test.c`, shipped in the bootstrap release) for menus.
 
 ## Compatibility checks
 

@@ -20,6 +20,7 @@ _SUCCESS = "Mux successful complete"
 _MUXOPT = "--no-pcr-on-video-pid --new-audio-pes --blu-ray --vbr"
 _H264 = "V_MPEG4/ISO/AVC"
 _AC3 = "A_AC3"
+_PGS = "S_HDMV/PGS"
 _KINDS = {"V": "video", "A": "audio", "S": "subtitle"}
 # tsMuxeR stream id that reads each probe audio codec; codecs missing here (flac, opus...) are not listed.
 _AUDIO_FAMILY = {"aac": "A_AAC", "mp3": "A_MP3", "ac3": _AC3, "eac3": _AC3, "truehd": _AC3, "dts": "A_DTS"}
@@ -29,7 +30,7 @@ _AUDIO_FAMILY = {"aac": "A_AAC", "mp3": "A_MP3", "ac3": _AC3, "eac3": _AC3, "tru
 class Track:
     """A track as listed by tsMuxeR's detection mode."""
 
-    id: int
+    id: int | None  # None for a raw elementary stream (a .sup file), which has no track number
     stream_id: str  # e.g. "V_MPEG4/ISO/AVC", "A_AC3", "S_HDMV/PGS"
     language: str | None
 
@@ -86,7 +87,7 @@ def build_meta(entries: list[Entry], chapters: tuple[Chapter, ...] = ()) -> str:
         track = entry.track
         if '"' in str(entry.path):
             raise MuxError(f"file names containing double quotes are not supported: {entry.path}")
-        params = [f"track={track.id}"]
+        params = [] if track.id is None else [f"track={track.id}"]
         if track.stream_id == _H264:
             params = ["insertSEI", "contSPS", *params]
         if track.language and len(track.language) == 3:
@@ -194,7 +195,10 @@ class TsMuxer:
             index: self._detect_replacement(path)
             for index, path in request.audio_replacements.items()
         }
-        meta = build_meta(plan_tracks(tracks, info, replacements), info.chapters)
+        entries = plan_tracks(tracks, info, replacements)
+        for graphics in request.graphics:  # raw .sup files: tsMuxeR lists no tracks for them
+            entries.append(Entry(graphics.resolve(), Track(None, _PGS, None)))
+        meta = build_meta(entries, info.chapters)
         log.debug("meta file:\n%s", meta.rstrip())
 
         with tempfile.TemporaryDirectory(prefix="bdauthor-") as tmp:
