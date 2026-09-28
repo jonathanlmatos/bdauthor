@@ -83,6 +83,33 @@ def make_mkv(tmp_path_factory):
     return factory
 
 
+@pytest.fixture
+def make_disc(tmp_path):
+    """Create a small fake disc tree: BDMV + BACKUP, CERTIFICATE, plus files that must be ignored."""
+
+    def factory(name: str = "MY DISC") -> Path:
+        root = tmp_path / name
+        contents = {
+            "BDMV/index.bdmv": b"INDX0200",
+            "BDMV/MovieObject.bdmv": b"MOBJ0200" * 8,
+            "BDMV/PLAYLIST/00000.mpls": b"MPLS0200" * 16,
+            "BDMV/CLIPINF/00000.clpi": b"HDMV0200" * 32,
+            "BDMV/STREAM/00000.m2ts": bytes(range(256)) * 4096,  # 1 MiB
+            "BDMV/BACKUP/index.bdmv": b"INDX0200",
+            "BDMV/BACKUP/PLAYLIST/00000.mpls": b"MPLS0200" * 16,
+            "CERTIFICATE/id.bdmv": b"CERT",
+            "notes.txt": b"not part of the disc",
+            "extra/readme.md": b"not part of the disc",
+        }
+        for relative, data in contents.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        return root
+
+    return factory
+
+
 @pytest.fixture(scope="session")
 def tsmuxer() -> Path:
     path = find_tsmuxer()

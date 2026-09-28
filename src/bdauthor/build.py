@@ -5,19 +5,13 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from bdauthor.bdmv import REQUIRED_FILES, directory_size, missing_files
 from bdauthor.model import Media, MediaInfo, Report
 from bdauthor.mux.base import Muxer, MuxRequest, ProgressCallback
 from bdauthor.probe import probe
 from bdauthor.transcode import encode_ac3, validate_with_audio_transcode
 from bdauthor.validate import validate
 
-REQUIRED_FILES = (
-    "index.bdmv",
-    "MovieObject.bdmv",
-    "PLAYLIST/00000.mpls",
-    "CLIPINF/00000.clpi",
-    "STREAM/00000.m2ts",
-)
 _DURATION_TOLERANCE = 0.02  # muxed duration may differ slightly from the container's
 
 
@@ -56,17 +50,13 @@ def prepare_output(output_dir: Path, *, force: bool) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
 
-def _directory_size(path: Path) -> int:
-    return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
-
-
 def verify_output(bdmv_dir: Path, info: MediaInfo, media: Media) -> int:
     """Check the generated directory; returns its size in bytes."""
-    missing = [name for name in REQUIRED_FILES if not (bdmv_dir / name).is_file()]
+    missing = missing_files(bdmv_dir)
     if missing:
         raise BuildError(f"the muxer did not produce: {', '.join(missing)}")
 
-    size = _directory_size(bdmv_dir)
+    size = directory_size(bdmv_dir)
     if size > media.capacity_bytes:
         raise BuildError(
             f"BDMV is {_gib(size)}, which exceeds {media.label} capacity "

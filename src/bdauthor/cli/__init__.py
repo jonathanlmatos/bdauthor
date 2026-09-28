@@ -7,6 +7,7 @@ import typer
 from bdauthor.cli.build import build
 from bdauthor.cli.check import check
 from bdauthor.cli.doctor import doctor
+from bdauthor.cli.iso import iso
 from bdauthor.cli.probe import probe
 
 app = typer.Typer(
@@ -30,3 +31,4 @@ app.command()(doctor)
 app.command()(probe)
 app.command()(check)
 app.command()(build)
+app.command()(iso)

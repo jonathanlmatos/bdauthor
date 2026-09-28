@@ -11,7 +11,7 @@ Personal project. Output plays on **hardware Blu-ray players**, so anything the 
 - **Never re-encode silently.** If a stream is not BD-compatible, the tool reports why and stops. Video and subtitles are never re-encoded (a video transcode would be a future opt-in flag that consumes the validator's report; for DVD media it would be size-driven).
 - **`--transcode-audio` (opt-in, `check` and `build`)** re-encodes audio streams the validator rejects to AC3 (mono 128 / stereo 192 / 5.1 448 kb/s, 48 kHz, more than 6 channels downmixed to 5.1). The report shows a warning per converted stream and is computed on the post-conversion file (including the size estimate).
 - Never lose resolution.
-- Phase 1 (done): `doctor`, `probe`, `check`, `build` (no menu). Pending in Phase 1: an optional `--deep` packet scan (keyframe interval, peak bitrate, VFR). Phase 2: `plan`, HDMV menu generator (template-driven), `iso`.
+- Phase 1 (done): `doctor`, `probe`, `check`, `build` (no menu), `iso` (separate step: it packs an existing BDMV directory; chaining the steps into one command is a later, optional shortcut). Pending in Phase 1: an optional `--deep` packet scan (keyframe interval, peak bitrate, VFR). Phase 2: `plan`, HDMV menu generator (template-driven).
 
 ## Pipeline
 
@@ -42,6 +42,8 @@ src/bdauthor/
   validate/       # one module per rule group (container, video, audio, subtitles, size) -> Report
   mux/            # base.py (Muxer interface, MuxError) + tsmuxer.py (meta generation + subprocess)
   transcode.py    # AudioPlan, validate_with_audio_transcode (report on the converted file), encode_ac3 (PyAV)
+  bdmv.py         # REQUIRED_FILES, DISC_DIRECTORIES, directory helpers shared by build and iso
+  iso.py          # BDMV directory -> ISO with pycdlib (build_iso, IsoError), written to *.part then renamed
   build.py        # probe -> validate -> [re-encode audio] -> prepare output -> mux -> verify BDMV
 tests/            # pytest; builders.py = model factories, conftest.py builds synthetic mkvs with PyAV
 ```
@@ -56,7 +58,13 @@ tests/            # pytest; builders.py = model factories, conftest.py builds sy
 - `tsMuxeR <file>` (detection mode) lists tracks (`Track ID`, `Stream ID`, `Stream lang`). The build muxes **exactly the tracks tsMuxeR detects** (IDs come from that output, never guessed from PyAV indices) after checking the video/audio/subtitle counts match the probe.
 - `MUXOPT --blu-ray` with a directory as output creates `BDMV/` (index, MovieObject, PLAYLIST, CLIPINF, STREAM, BACKUP). It does **not** create `CERTIFICATE/`.
 - mkv chapters become `--custom-chapters=hh:mm:ss.mmm;...` (a chapter at 0 is added if missing). No chapters are invented when the mkv has none.
-- `--blu-ray` with an output name ending in `.iso` makes tsMuxeR write the ISO directly: a candidate for the future `iso` step before falling back to pycdlib.
+- `--blu-ray` with an output name ending in `.iso` makes tsMuxeR write an ISO during the mux, but it cannot pack an existing directory (so it cannot include a future menu). Its ISO is **pure UDF 2.50 with a Metadata Partition** (BEA01/NSR03/TEA01 volume descriptors, no ISO9660 `CD001`), the layout ImgBurn also writes; pycdlib cannot even open it ("must have at least one PVD").
+
+## ISO (`bdauthor iso DIR -o disc.iso`)
+
+- Built from the directory only, never from the mkv. Only `BDMV/` and `CERTIFICATE/` are included; other files in the directory are ignored. Checks the content against `--media` capacity and reads the image back to compare file list and sizes.
+- pycdlib writes a **UDF 2.60 + ISO9660 (level 3) bridge**, not pure UDF 2.50 with metadata partition. Files over 4 GiB work (checked with a 4.2 GiB file). Hardware players/burners that require a strict BD image may reject it: the safest path to a disc is burning the BDMV directory (e.g. ImgBurn). A pure-UDF 2.50 writer would be the way to close this gap, using tsMuxeR's ISO as a byte-level reference.
+- Not yet verified on a hardware player.
 - tsMuxeR also has `--avchd`; not used (BDMV only).
 - **tsMuxeR ignores the audio start offset stored in an mkv** (audio and video both start at the same time in the m2ts). The build compensates with `timeshift=<ms>ms` = audio start - video start (from the probe's `start_time`), for remuxed and re-encoded audio alike. `timeshift` accepts negative values.
 - Re-encoded audio is written by PyAV to a temporary **audio-only mkv** (keeps timestamps and language) that the meta file references instead of the source's audio track. Audio tracks are matched to probe streams by order and codec family (`plan_tracks`); it refuses to guess on any mismatch.
