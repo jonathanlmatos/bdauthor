@@ -36,11 +36,16 @@ class MenuGraphics:
         return display_set(self.composition, self.palettes, self.images)
 
 
-def simple_menu(video: VideoStream, label: str = "Play") -> MenuGraphics:
-    """A page with one button that starts the movie (title 1)."""
+def frame_rate_code(video: VideoStream) -> int:
     code = FRAME_RATE_CODES.get((video.fps.numerator, video.fps.denominator)) if video.fps else None
     if code is None:
         raise MenuGraphicsError(f"no IG frame rate code for {video.fps} fps")
+    return code
+
+
+def simple_menu(video: VideoStream, label: str = "Play") -> MenuGraphics:
+    """A page with one button that starts the movie (title 1)."""
+    code = frame_rate_code(video)
 
     scale = video.height / _REFERENCE_HEIGHT
     width, height = (round(size * scale) for size in _BUTTON_SIZE)

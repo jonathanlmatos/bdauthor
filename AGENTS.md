@@ -11,7 +11,7 @@ Personal project. Output plays on **hardware Blu-ray players**, so anything the 
 - **Never re-encode silently.** If a stream is not BD-compatible, the tool reports why and stops. Video and subtitles are never re-encoded (a video transcode would be a future opt-in flag that consumes the validator's report; for DVD media it would be size-driven).
 - **`--transcode-audio` (opt-in, `check` and `build`)** re-encodes audio streams the validator rejects to AC3 (mono 128 / stereo 192 / 5.1 448 kb/s, 48 kHz, more than 6 channels downmixed to 5.1). The report shows a warning per converted stream and is computed on the post-conversion file (including the size estimate).
 - Never lose resolution.
-- Phase 1 (done): `doctor`, `probe`, `check`, `build` (no menu), `iso` (separate step: it packs an existing BDMV directory; chaining the steps into one command is a later, optional shortcut). Pending in Phase 1: an optional `--deep` packet scan (keyframe interval, peak bitrate, VFR). Phase 2: `plan`, HDMV menu generator (template-driven).
+- Phase 1 (done): `doctor`, `probe`, `check`, `build` (no menu), `iso` (separate step: it packs an existing BDMV directory; chaining the steps into one command is a later, optional shortcut). Pending in Phase 1: an optional `--deep` packet scan (keyframe interval, peak bitrate, VFR). Phase 2 (in progress): HDMV menu generator (template-driven). Done: navigation writers, looping menu clip, Play button via IG, `build --menu`. Next: title text and a chapters page, then `plan`.
 
 ## Pipeline
 
@@ -50,7 +50,7 @@ src/bdauthor/
   navigation/     # Phase 2 (M1): writers for index.bdmv (index.py) and MovieObject.bdmv (movie_object.py: instruction builders, pack_movie_objects); write_navigation() also writes the BACKUP/ copies
                   #   playlist.py: patches an .mpls (retarget_playlist, clip_ids, relabel_graphics_as_interactive); clip_info.py: patches a .clpi (relabel_stream, program_map_pid)
   bdav.py         # .m2ts patching: convert_graphics_to_interactive (PID 0x1200 -> 0x1400, PMT stream type 0x90 -> 0x91 + CRC, ICS type 0x16 -> 0x18), crc32_mpeg
-  menu/           # Phase 2: add_menu(bdmv_dir, video, muxer) adds a looping menu with a Play button (clip/playlist 00001, movie = title 1). Not wired into the CLI yet (M6)
+  menu/           # Phase 2: add_menu(bdmv_dir, video, muxer) adds a looping menu with a Play button (clip/playlist 00001, movie = title 1); `bdauthor build --menu` uses it (check_menu_supported runs before the mux)
                   #   ig.py = IG segment encoders (ICS, palette, object + RLE, END; pgs_carrier); render.py = Pillow buttons -> palette/indexed images;
                   #   simple.py = the Play-button menu; programs.py = which movie object does what; background.py = the black clip + the mux
 tools/oracle/     # bd_menu_test.c: our own libbluray-based oracle (plays a disc from the start, prints overlays/events, can press keys); built by the bootstrap workflow

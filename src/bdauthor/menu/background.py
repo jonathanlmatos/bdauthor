@@ -18,12 +18,17 @@ class MenuError(Exception):
     """The menu could not be added to the disc."""
 
 
-def write_black_video(dest: Path, video: VideoStream, seconds: int = MENU_SECONDS) -> None:
-    """An H.264 mkv of black frames with the resolution and frame rate of `video`."""
+def check_video_supported(video: VideoStream) -> None:
+    """Raise MenuError if a black clip in the format of `video` cannot be made."""
     if video.interlaced:
         raise MenuError("menus for interlaced video are not supported yet")
     if video.fps is None:
         raise MenuError("the frame rate of the video is unknown")
+
+
+def write_black_video(dest: Path, video: VideoStream, seconds: int = MENU_SECONDS) -> None:
+    """An H.264 mkv of black frames with the resolution and frame rate of `video`."""
+    check_video_supported(video)
     fps = Fraction(video.fps)
     with av.open(str(dest), "w") as out:
         stream = out.add_stream("libx264", rate=fps)

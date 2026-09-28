@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bdauthor.bdmv import REQUIRED_FILES, directory_size, missing_files
+from bdauthor.menu import add_menu, check_menu_supported
 from bdauthor.model import Media, MediaInfo, Report
 from bdauthor.mux.base import Muxer, MuxRequest, ProgressCallback
 from bdauthor.probe import probe
@@ -90,15 +91,16 @@ def build_disc(
     *,
     force: bool = False,
     transcode_audio: bool = False,
+    menu: bool = False,
     on_progress: ProgressCallback | None = None,
     on_transcode_progress: ProgressCallback | None = None,
 ) -> BuildResult:
     """Validate `source` and, if it is compatible, write `output_dir/BDMV`.
 
     With `transcode_audio`, incompatible audio streams are re-encoded to AC3 first; video and
-    subtitles are never re-encoded.
+    subtitles are never re-encoded. With `menu`, a menu with a Play button is added and plays first.
 
-    Raises ProbeError, CheckFailed, TranscodeError, BuildError or MuxError.
+    Raises ProbeError, CheckFailed, TranscodeError, BuildError, MenuError or MuxError.
     """
     info = probe(source)
     if transcode_audio:
@@ -107,6 +109,8 @@ def build_disc(
         report, plans = validate(info, media), []
     if not report.passed:
         raise CheckFailed(report)
+    if menu:
+        check_menu_supported(info.video[0])  # before the long mux
 
     prepare_output(output_dir, force=force)
     with tempfile.TemporaryDirectory(prefix="bdauthor-audio-") as tmp:
@@ -121,5 +125,7 @@ def build_disc(
         )
 
     bdmv_dir = output_dir / "BDMV"
+    if menu:
+        add_menu(bdmv_dir, info.video[0], muxer)
     size = verify_output(bdmv_dir, info, media)
     return BuildResult(bdmv_dir=bdmv_dir, size_bytes=size, report=report)

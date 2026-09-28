@@ -48,9 +48,9 @@ mkv chapters become playlist marks (`--custom-chapters`). If the mkv has none, t
 
 ## Menu (Phase 2, in progress)
 
-### `add_menu` is not wired into `bdauthor build` yet (open)
+### `bdauthor build --menu` is experimental (open)
 
-The menu (Play button) works end to end in libbluray but the CLI does not offer it yet (milestone M6); use `bdauthor.menu.add_menu` from Python. Only one button exists; the chapters screen and a title are later milestones.
+It adds a menu with a single Play button (`--menu`); the disc opens with it. The chapters screen and a title are later milestones. Interlaced video and frame rates without an IG code are refused before the mux starts.
 
 ### Interactive graphics are verified in libbluray only (open)
 

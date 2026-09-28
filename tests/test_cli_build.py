@@ -1,3 +1,4 @@
+import subprocess
 import importlib
 
 from typer.testing import CliRunner
@@ -71,3 +72,40 @@ def test_build_transcode_audio_re_encodes_incompatible_audio(make_mkv, tmp_path,
     assert "Built" in result.stdout
     for name in REQUIRED_FILES:
         assert (out / "BDMV" / name).is_file(), name
+
+
+def test_build_without_menu_has_no_menu_clip(good_mkv, tmp_path, tsmuxer):
+    out = tmp_path / "disc"
+    assert runner.invoke(app, ["build", str(good_mkv), "-o", str(out)]).exit_code == ExitCode.OK
+    assert not (out / "BDMV" / "PLAYLIST" / "00001.mpls").exists()
+
+
+def test_build_with_menu_adds_the_menu_and_the_play_button_starts_the_movie(
+    good_mkv, tmp_path, tsmuxer, libbluray_tool
+):
+    out = tmp_path / "disc"
+    result = runner.invoke(app, ["build", str(good_mkv), "-o", str(out), "--menu"])
+    assert result.exit_code == ExitCode.OK, result.output
+    for name in ("PLAYLIST/00001.mpls", "CLIPINF/00001.clpi", "STREAM/00001.m2ts"):
+        assert (out / "BDMV" / name).is_file(), name
+
+    played = subprocess.run(
+        [str(libbluray_tool("bd_menu_test")), "-k", "enter", str(out)], capture_output=True, text=True, timeout=60
+    ).stdout.splitlines()
+    assert "EVENT MENU 1" in played  # the menu came up first
+    assert "EVENT TITLE 1" in played[played.index("KEY enter") :]  # and Play starts the movie
+
+
+def test_build_with_menu_refuses_unsupported_video_before_muxing(good_mkv, tmp_path, monkeypatch):
+    import bdauthor.build as build_module
+    from bdauthor.menu import MenuError
+
+    def refuse(video):
+        raise MenuError("menus for interlaced video are not supported yet")
+
+    monkeypatch.setattr(build_module, "check_menu_supported", refuse)
+    out = tmp_path / "disc"
+    result = runner.invoke(app, ["build", str(good_mkv), "-o", str(out), "--menu"])
+    assert result.exit_code == ExitCode.BUILD_FAILED
+    assert "menu: menus for interlaced video" in result.output
+    assert not out.exists()  # nothing was written

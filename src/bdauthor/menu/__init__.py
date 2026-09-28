@@ -5,16 +5,16 @@ import tempfile
 from pathlib import Path
 
 from bdauthor.bdav import IG_PID, IG_STREAM_TYPE, PGS_PID, PGS_STREAM_TYPE, BdavError, convert_graphics_to_interactive
-from bdauthor.menu.background import MenuError, mux_menu_clip
+from bdauthor.menu.background import MenuError, check_video_supported, mux_menu_clip
 from bdauthor.menu.programs import menu_navigation
-from bdauthor.menu.simple import MenuGraphicsError, simple_menu
+from bdauthor.menu.simple import MenuGraphicsError, frame_rate_code, simple_menu
 from bdauthor.model import VideoStream
 from bdauthor.mux.base import Muxer
 from bdauthor.navigation import write_navigation
 from bdauthor.navigation.clip_info import ClipInfoError, program_map_pid, relabel_stream
 from bdauthor.navigation.playlist import PlaylistError, relabel_graphics_as_interactive, retarget_playlist
 
-__all__ = ["MenuError", "add_menu"]
+__all__ = ["MenuError", "add_menu", "check_menu_supported"]
 
 MENU_CLIP = "00001"
 _MOVIE_CLIP = "00000"
@@ -47,6 +47,15 @@ def _copy_menu_clip(menu_bdmv: Path, bdmv_dir: Path) -> None:
 
     for folder in ("CLIPINF", "PLAYLIST"):  # BACKUP/ mirrors both
         shutil.copyfile(targets[folder], bdmv_dir / "BACKUP" / folder / targets[folder].name)
+
+
+def check_menu_supported(video: VideoStream) -> None:
+    """Raise MenuError if a menu cannot be made for a movie with this video (cheap; do it before muxing)."""
+    check_video_supported(video)
+    try:
+        frame_rate_code(video)
+    except MenuGraphicsError as exc:
+        raise MenuError(str(exc)) from exc
 
 
 def add_menu(bdmv_dir: Path, video: VideoStream, muxer: Muxer) -> None:

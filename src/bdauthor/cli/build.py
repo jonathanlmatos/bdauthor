@@ -11,6 +11,7 @@ from bdauthor.cli._options import MediaOption, TranscodeAudioOption
 from bdauthor.cli._report import print_report
 from bdauthor.deps import TSMUXER_HINT, find_tsmuxer
 from bdauthor.exitcodes import ExitCode
+from bdauthor.menu import MenuError
 from bdauthor.model import Media
 from bdauthor.mux.base import MuxError
 from bdauthor.mux.tsmuxer import TsMuxer
@@ -38,6 +39,10 @@ def build(
     force: Annotated[
         bool, typer.Option("--force", help="Replace an existing BDMV/ in the output directory.")
     ] = False,
+    menu: Annotated[
+        bool,
+        typer.Option("--menu", help="Add a menu with a Play button that the disc opens with (experimental)."),
+    ] = False,
 ) -> None:
     """Remux a compatible media file into a BDMV directory (video is never re-encoded)."""
     tsmuxer = find_tsmuxer()
@@ -62,6 +67,7 @@ def build(
                 TsMuxer(tsmuxer),
                 force=force,
                 transcode_audio=transcode_audio,
+                menu=menu,
                 on_progress=lambda percent: progress.update(mux_task, completed=percent, visible=True),
                 on_transcode_progress=lambda percent: progress.update(
                     transcode_task, completed=percent, visible=True
@@ -72,6 +78,8 @@ def build(
     except CheckFailed as exc:
         print_report(exc.report, out, name=file.name)
         raise typer.Exit(ExitCode.CHECK_FAILED) from exc
+    except MenuError as exc:
+        raise _fail(f"menu: {exc}", ExitCode.BUILD_FAILED) from exc
     except (BuildError, MuxError, TranscodeError) as exc:
         raise _fail(str(exc), ExitCode.BUILD_FAILED) from exc
 
