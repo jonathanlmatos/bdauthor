@@ -7,3 +7,4 @@ class ExitCode(IntEnum):
     OK = 0
     CHECK_FAILED = 1
     MISSING_DEPENDENCY = 3
+    BUILD_FAILED = 4

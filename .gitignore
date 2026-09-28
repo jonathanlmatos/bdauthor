@@ -11,3 +11,6 @@ wheels/
 
 # Third-party binaries (downloaded locally, not committed)
 vendor/
+
+# Test caches
+.pytest_cache/
