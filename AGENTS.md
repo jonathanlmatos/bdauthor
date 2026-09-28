@@ -48,6 +48,8 @@ src/bdauthor/
   iso.py          # BDMV directory -> ISO with pycdlib (build_iso, IsoError), written to *.part then renamed
   build.py        # probe -> validate -> [re-encode audio] -> prepare output -> mux -> verify BDMV
   navigation/     # Phase 2 (M1): writers for index.bdmv (index.py) and MovieObject.bdmv (movie_object.py: instruction builders, pack_movie_objects); write_navigation() also writes the BACKUP/ copies
+                  #   playlist.py: patches the clip id of an .mpls (retarget_playlist, clip_ids)
+  menu/           # Phase 2 (M2): add_menu(bdmv_dir, video, muxer) adds a looping black menu (clip/playlist 00001, movie = title 1); programs.py = which movie object does what; background.py = the black clip. Not wired into the CLI yet (M6)
 scripts/          # bootstrap.py + bootstrap.lock.json (download pinned dev tools into vendor/)
 .github/workflows/bootstrap.yml   # manual workflow that builds and publishes those tools
 tests/            # pytest; builders.py = model factories, conftest.py builds synthetic mkvs with PyAV

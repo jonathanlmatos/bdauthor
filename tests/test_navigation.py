@@ -11,6 +11,7 @@ import pytest
 
 from bdauthor.navigation import write_navigation
 from bdauthor.navigation.index import Access, HdmvRef, IndexTable, PlaybackType, Title
+from bdauthor.navigation.playlist import PlaylistError, clip_ids, retarget_playlist
 from bdauthor.navigation.movie_object import (
     Compare,
     MovieObject,
@@ -243,3 +244,44 @@ def test_index_dump_reads_our_index(libbluray_tool, tmp_path):
     assert re.search(r"First playback:\s+object type\s*: HDMV\s+playback type\s*: Interactive\s+id_ref\s*: 2", out)
     assert re.search(r"Top menu:\s+object type\s*: HDMV\s+playback type\s*: Interactive\s+id_ref\s*: 1", out)
     assert "Titles: 2" in out
+
+
+# --- playlists ------------------------------------------------------------------------------------
+
+
+def test_clip_ids_lists_the_clip_of_every_play_item(tsmuxer_disc):
+    data = (tsmuxer_disc / "BDMV" / "PLAYLIST" / "00000.mpls").read_bytes()
+    assert clip_ids(data) == ["00000"]
+
+
+def test_retarget_playlist_changes_only_the_clip_id(tsmuxer_disc):
+    data = (tsmuxer_disc / "BDMV" / "PLAYLIST" / "00000.mpls").read_bytes()
+    patched = retarget_playlist(data, "00000", "00001")
+    assert clip_ids(patched) == ["00001"]
+    assert len(patched) == len(data)
+    assert sum(a != b for a, b in zip(data, patched)) == 1  # "00000" -> "00001": one digit differs
+
+
+def test_retarget_playlist_refuses_the_wrong_clip(tsmuxer_disc):
+    data = (tsmuxer_disc / "BDMV" / "PLAYLIST" / "00000.mpls").read_bytes()
+    with pytest.raises(PlaylistError, match="expected 00007"):
+        retarget_playlist(data, "00007", "00001")
+
+
+@pytest.mark.parametrize("bad", ["1", "abcde", "000001"])
+def test_retarget_playlist_refuses_a_malformed_clip_id(tsmuxer_disc, bad):
+    data = (tsmuxer_disc / "BDMV" / "PLAYLIST" / "00000.mpls").read_bytes()
+    with pytest.raises(PlaylistError, match="5 digits"):
+        retarget_playlist(data, "00000", bad)
+
+
+def test_retarget_playlist_refuses_sub_paths_and_garbage(tsmuxer_disc):
+    data = bytearray((tsmuxer_disc / "BDMV" / "PLAYLIST" / "00000.mpls").read_bytes())
+    list_pos = int.from_bytes(data[8:12], "big")
+    data[list_pos + 8 : list_pos + 10] = b"\x00\x01"  # number_of_SubPaths = 1
+    with pytest.raises(PlaylistError, match="sub paths"):
+        clip_ids(bytes(data))
+    with pytest.raises(PlaylistError, match="not a playlist"):
+        clip_ids(b"NOPE" * 10)
+    with pytest.raises(PlaylistError, match="truncated"):
+        clip_ids(bytes(data[: list_pos + 4]))
