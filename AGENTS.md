@@ -50,6 +50,8 @@ tests/            # pytest; builders.py = model factories, conftest.py builds sy
 
 ## Development
 
+- Known problems, limits and what has (not) been verified on real players: `docs/known-issues.md`. Add new findings there.
+
 - `uv run pytest` runs everything. Tests generate tiny synthetic mkv files with PyAV (libx264), so no media files are needed. Tests that call the real tsMuxeR use the `tsmuxer` fixture and are skipped when the binary is missing.
 - Manual checks with a real file: `uv run bdauthor probe|check|build FILE ...`; add `-v` to see the tsMuxeR command and generated meta file.
 
