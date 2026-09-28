@@ -1,0 +1,79 @@
+name: bootstrap
+
+# Builds the development tools once and attaches them to the "bootstrap" pre-release.
+# Developers then run `uv run python scripts/bootstrap.py` instead of compiling anything.
+# Run it by hand (Actions tab -> bootstrap -> Run workflow) when a tool version changes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      libbluray_tag:
+        description: libbluray tag to build (https://code.videolan.org/videolan/libbluray)
+        default: "1.5.1"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  LIBBLURAY_URL: https://code.videolan.org/videolan/libbluray.git
+  LIBBLURAY_TAG: ${{ inputs.libbluray_tag }}
+  TSMUXER_VERSION: "2.7.0"
+  TSMUXER_SHA256: ceaaa181ab70e201685b1e45260d337d1cbdb0aba1408d4fbc47e232a7e4c987
+  RELEASE_TAG: bootstrap
+
+jobs:
+  bootstrap:
+    # An older glibc than the developer machines, so the binaries run on newer systems too.
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install build tools
+        run: pip install meson ninja
+
+      - name: Build the libbluray tools
+        run: |
+          git clone --depth 1 --branch "$LIBBLURAY_TAG" "$LIBBLURAY_URL" libbluray
+          cd libbluray
+          # Static library inside the executables, no Java, no optional libraries.
+          # The only runtime dependency left is the C library.
+          meson setup build --buildtype=release --default-library=static \
+            -Denable_devtools=true -Denable_examples=true \
+            -Dbdj_jar=disabled -Dfreetype=disabled -Dfontconfig=disabled -Dlibxml2=disabled
+          ninja -C build
+
+      - name: Package the libbluray tools
+        run: |
+          mkdir -p stage/bin out
+          for tool in devtools/hdmv_test devtools/mobj_dump devtools/mpls_dump devtools/clpi_dump \
+                      examples/index_dump examples/sound_dump tools/bd_info tools/bd_list_titles; do
+            install -m 755 "libbluray/build/src/$tool" stage/bin/
+          done
+          strip stage/bin/*
+          cp libbluray/COPYING stage/COPYING
+          echo "libbluray $LIBBLURAY_TAG, built from $LIBBLURAY_URL" > stage/SOURCE.txt
+          tar -C stage -czf "out/libbluray-tools-${LIBBLURAY_TAG}-linux-x86_64.tar.gz" .
+
+      - name: Mirror tsMuxeR
+        run: |
+          curl -fsSL -o "out/tsMuxer-${TSMUXER_VERSION}-linux.zip" \
+            "https://github.com/justdan96/tsMuxer/releases/download/${TSMUXER_VERSION}/tsMuxer-${TSMUXER_VERSION}-linux.zip"
+          echo "${TSMUXER_SHA256}  out/tsMuxer-${TSMUXER_VERSION}-linux.zip" | sha256sum -c -
+
+      - name: Checksums
+        run: |
+          cd out
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Development tools for BDAuthor, downloaded by scripts/bootstrap.py (not a BDAuthor release).
+
+          - libbluray ${LIBBLURAY_TAG} (LGPL-2.1), built from ${LIBBLURAY_URL} at that tag: hdmv_test, mobj_dump, mpls_dump, clpi_dump, index_dump, sound_dump, bd_info, bd_list_titles.
+          - tsMuxeR ${TSMUXER_VERSION} (LGPL-2.1), unmodified copy of the upstream release: https://github.com/justdan96/tsMuxer/releases/tag/${TSMUXER_VERSION}"
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --prerelease --title "Development tools (bootstrap)" --notes "$notes"
+          gh release edit "$RELEASE_TAG" --prerelease --notes "$notes"
+          gh release upload "$RELEASE_TAG" out/* --clobber

@@ -15,8 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TSMUXER_NAME = "tsMuxeR.exe" if sys.platform == "win32" else "tsMuxeR"
 TSMUXER_VENDOR_PATH = REPO_ROOT / "vendor" / "tsmuxer" / TSMUXER_NAME
 TSMUXER_HINT = (
-    "Download the tsMuxeR CLI (not the GUI) from "
-    "https://github.com/justdan96/tsMuxer/releases and extract it to vendor/tsmuxer/"
+    "Run `python scripts/bootstrap.py tsmuxer` to download it into vendor/tsmuxer/ "
+    "(or put the tsMuxeR CLI, not the GUI, on PATH)"
 )
 
 

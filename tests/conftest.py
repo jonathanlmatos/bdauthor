@@ -23,7 +23,7 @@ def write_mkv(
     audio_title: str | None = None,
     chapters: list[tuple[float, float, str]] | None = None,
 ) -> None:
-    """Write a tiny synthetic mkv (gray H.264 video + silent audio)."""
+    """Write a tiny synthetic mkv (all-zero H.264 video + silent audio)."""
     with av.open(str(path), "w") as out:
         video = out.add_stream("libx264", rate=fps)
         video.width, video.height, video.pix_fmt = width, height, pix_fmt
@@ -50,6 +50,8 @@ def write_mkv(
 
         for i in range(round(float(fps) * seconds)):
             frame = av.VideoFrame(width, height, pix_fmt)
+            for plane in frame.planes:  # a new frame is uninitialised memory: zero it so files are deterministic
+                plane.update(bytes(plane.buffer_size))
             frame.pts = i
             for packet in video.encode(frame):
                 out.mux(packet)

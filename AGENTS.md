@@ -25,7 +25,8 @@ Plan the whole disc in memory (a `Disc` model), then write `BDMV/` **once**. Do 
 - `av` (PyAV, bundles FFmpeg): probing now, transcoding later. Do **not** require a system `ffmpeg`/`ffprobe`.
 - `pillow`: menu rendering. `pycdlib`: ISO (UDF 2.5/2.6; ISO is a "plus", an external tool is an acceptable last resort).
 - `typer`: CLI framework.
-- **tsMuxeR 2.7.0** (CLI only, never the GUI) is the only external binary. It lives in `vendor/tsmuxer/tsMuxeR`, is downloaded manually and is **git-ignored** (`vendor/`). Zip SHA-256: `ceaaa181ab70e201685b1e45260d337d1cbdb0aba1408d4fbc47e232a7e4c987`. `deps.py` looks in `vendor/` first, then `PATH`. A setup script is out of MVP scope.
+- **tsMuxeR 2.7.0** (CLI only, never the GUI) is the only external binary. It lives in `vendor/tsmuxer/tsMuxeR`, is **git-ignored** (`vendor/`). Zip SHA-256: `ceaaa181ab70e201685b1e45260d337d1cbdb0aba1408d4fbc47e232a7e4c987`. `deps.py` looks in `vendor/` first, then `PATH`.
+- **Bootstrap** (`scripts/bootstrap.py`, standard library only): `python scripts/bootstrap.py [name...]` downloads the development tools into `vendor/` from the repository's `bootstrap` pre-release, verifying each asset against the SHA-256 pinned in `scripts/bootstrap.lock.json` (committed). The `bootstrap` GitHub workflow (`.github/workflows/bootstrap.yml`, manual run) builds the libbluray tools (`hdmv_test`, `mobj_dump`, `mpls_dump`, `clpi_dump`, `index_dump`, `sound_dump`, `bd_info`, `bd_list_titles`; meson, static, no Java, only libc needed) and mirrors tsMuxeR 2.7.0, then attaches them plus `SHA256SUMS`. After a new run, `python scripts/bootstrap.py --update-lock` pins the published hashes (the one explicit trust step) and the lock file is committed. The libbluray tools are development-only oracles for the Phase 2 menu work: nothing may require them at runtime, and tests that use them skip when they are missing.
 - Muxing goes through a `Muxer` interface (`mux/base.py`) so a pure-Python muxer can replace tsMuxeR later.
 
 ## Layout
@@ -45,6 +46,8 @@ src/bdauthor/
   bdmv.py         # REQUIRED_FILES, DISC_DIRECTORIES, directory helpers shared by build and iso
   iso.py          # BDMV directory -> ISO with pycdlib (build_iso, IsoError), written to *.part then renamed
   build.py        # probe -> validate -> [re-encode audio] -> prepare output -> mux -> verify BDMV
+scripts/          # bootstrap.py + bootstrap.lock.json (download pinned dev tools into vendor/)
+.github/workflows/bootstrap.yml   # manual workflow that builds and publishes those tools
 tests/            # pytest; builders.py = model factories, conftest.py builds synthetic mkvs with PyAV
 ```
 
@@ -91,5 +94,6 @@ tests/            # pytest; builders.py = model factories, conftest.py builds sy
 
 ## Working with the user
 
-- The user writes in Portuguese; reply in Portuguese. Code, comments and repo docs are in English.
+- **Everything in this repository is written in English**: code (function, variable, class and module names), comments, docstrings, documentation (`AGENTS.md`, `docs/`), CLI help/messages, test names, commit messages. This holds regardless of the language used to talk with the user in the session.
+- The user writes in Portuguese; reply to them in Portuguese in the session only.
 - Discuss design before big implementations; prefer the smallest change that fits the surrounding code.
