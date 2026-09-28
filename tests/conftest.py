@@ -4,6 +4,8 @@ from pathlib import Path
 import av
 import pytest
 
+from bdauthor.deps import find_tsmuxer
+
 
 def write_mkv(
     path: Path,
@@ -77,6 +79,14 @@ def make_mkv(tmp_path_factory):
         return path
 
     return factory
+
+
+@pytest.fixture(scope="session")
+def tsmuxer() -> Path:
+    path = find_tsmuxer()
+    if path is None:
+        pytest.skip("tsMuxeR is not installed (see `bdauthor doctor`)")
+    return path
 
 
 @pytest.fixture(scope="session")

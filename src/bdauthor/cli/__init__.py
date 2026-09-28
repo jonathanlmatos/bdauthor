@@ -4,6 +4,7 @@ from typing import Annotated
 
 import typer
 
+from bdauthor.cli.build import build
 from bdauthor.cli.check import check
 from bdauthor.cli.doctor import doctor
 from bdauthor.cli.probe import probe
@@ -28,3 +29,4 @@ def main(
 app.command()(doctor)
 app.command()(probe)
 app.command()(check)
+app.command()(build)
