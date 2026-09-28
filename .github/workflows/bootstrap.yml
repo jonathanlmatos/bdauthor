@@ -68,12 +68,15 @@ jobs:
       - name: Publish the release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}  # this job does not check out the repository
         run: |
-          notes="Development tools for BDAuthor, downloaded by scripts/bootstrap.py (not a BDAuthor release).
+          cat > notes.md <<EOF
+          Development tools for BDAuthor, downloaded by scripts/bootstrap.py (not a BDAuthor release).
 
           - libbluray ${LIBBLURAY_TAG} (LGPL-2.1), built from ${LIBBLURAY_URL} at that tag: hdmv_test, mobj_dump, mpls_dump, clpi_dump, index_dump, sound_dump, bd_info, bd_list_titles.
-          - tsMuxeR ${TSMUXER_VERSION} (LGPL-2.1), unmodified copy of the upstream release: https://github.com/justdan96/tsMuxer/releases/tag/${TSMUXER_VERSION}"
+          - tsMuxeR ${TSMUXER_VERSION} (LGPL-2.1), unmodified copy of the upstream release: https://github.com/justdan96/tsMuxer/releases/tag/${TSMUXER_VERSION}
+          EOF
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
-            gh release create "$RELEASE_TAG" --prerelease --title "Development tools (bootstrap)" --notes "$notes"
-          gh release edit "$RELEASE_TAG" --prerelease --notes "$notes"
+            gh release create "$RELEASE_TAG" --prerelease --title "Development tools (bootstrap)" --notes-file notes.md
+          gh release edit "$RELEASE_TAG" --prerelease --notes-file notes.md
           gh release upload "$RELEASE_TAG" out/* --clobber
