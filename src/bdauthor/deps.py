@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TSMUXER_NAME = "tsMuxeR.exe" if sys.platform == "win32" else "tsMuxeR"
 TSMUXER_VENDOR_PATH = REPO_ROOT / "vendor" / "tsmuxer" / TSMUXER_NAME
+LIBBLURAY_VENDOR_DIR = REPO_ROOT / "vendor" / "libbluray" / "bin"
 TSMUXER_HINT = (
     "Run `python scripts/bootstrap.py tsmuxer` to download it into vendor/tsmuxer/ "
     "(or put the tsMuxeR CLI, not the GUI, on PATH)"
@@ -34,6 +35,18 @@ def find_tsmuxer() -> Path | None:
     if TSMUXER_VENDOR_PATH.is_file():
         return TSMUXER_VENDOR_PATH
     found = shutil.which(TSMUXER_NAME)
+    return Path(found) if found else None
+
+
+def find_libbluray_tool(name: str) -> Path | None:
+    """A libbluray command line tool (`mobj_dump`, `index_dump`, ...): vendor/ first, then PATH.
+
+    Development oracles only: nothing needed to build a disc may depend on them.
+    """
+    vendored = LIBBLURAY_VENDOR_DIR / name
+    if vendored.is_file():
+        return vendored
+    found = shutil.which(name)
     return Path(found) if found else None
 
 

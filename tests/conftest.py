@@ -4,7 +4,7 @@ from pathlib import Path
 import av
 import pytest
 
-from bdauthor.deps import find_tsmuxer
+from bdauthor.deps import find_libbluray_tool, find_tsmuxer
 
 
 def write_mkv(
@@ -129,6 +129,31 @@ def tsmuxer() -> Path:
     if path is None:
         pytest.skip("tsMuxeR is not installed (see `bdauthor doctor`)")
     return path
+
+
+@pytest.fixture(scope="session")
+def libbluray_tool():
+    """`libbluray_tool("mobj_dump")` -> path of the tool; the test is skipped when it is missing."""
+
+    def find(name: str) -> Path:
+        path = find_libbluray_tool(name)
+        if path is None:
+            pytest.skip(f"libbluray tool {name} is not installed (run scripts/bootstrap.py)")
+        return path
+
+    return find
+
+
+@pytest.fixture(scope="session")
+def tsmuxer_disc(good_mkv, tmp_path_factory, tsmuxer) -> Path:
+    """A disc directory written by the real tsMuxeR from `good_mkv`. Read-only: copy before editing."""
+    from bdauthor.build import build_disc
+    from bdauthor.model import Media
+    from bdauthor.mux.tsmuxer import TsMuxer
+
+    out = tmp_path_factory.mktemp("tsmuxer_disc")
+    build_disc(good_mkv, out, Media.BD25, TsMuxer(tsmuxer))
+    return out
 
 
 @pytest.fixture(scope="session")
