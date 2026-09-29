@@ -71,10 +71,19 @@ def _timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
 
 
-def _chapter_option(chapters: tuple[Chapter, ...]) -> str:
+def chapter_marks(chapters: tuple[Chapter, ...]) -> list[int]:
+    """Millisecond offsets of the playlist marks tsMuxeR writes for `chapters`: sorted, deduplicated,
+    always starting at 0. A mark's position in this list is its `PLAY_PL_MK` index."""
     starts = sorted({round(chapter.start * 1000) for chapter in chapters})
     if starts and starts[0] != 0:
         starts.insert(0, 0)
+    elif not starts:
+        starts = [0]
+    return starts
+
+
+def _chapter_option(chapters: tuple[Chapter, ...]) -> str:
+    starts = chapter_marks(chapters)
     if len(starts) < 2:
         return ""
     return " --custom-chapters=" + ";".join(_timestamp(ms / 1000) for ms in starts)

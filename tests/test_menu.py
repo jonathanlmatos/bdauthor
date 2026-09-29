@@ -209,6 +209,48 @@ def test_a_menu_without_a_title_has_no_text_in_the_clip(tsmuxer_disc, tmp_path, 
         assert all(15 <= value <= 17 for value in row)
 
 
+@pytest.fixture
+def disc_with_scenes(tmp_path_factory, tmp_path, tsmuxer):
+    """A disc with a Scenes page: 3 chapters at 0s, 2s and 4s of a 6-second movie."""
+    from bdauthor.build import build_disc
+    from bdauthor.model import Media
+    from tests.conftest import write_mkv
+
+    source = tmp_path_factory.mktemp("scenes_mkv") / "movie.mkv"
+    write_mkv(
+        source,
+        width=1280,
+        height=720,
+        seconds=6,
+        chapters=[(0.0, 2.0, "One"), (2.0, 4.0, "Two"), (4.0, 6.0, "Three")],
+    )
+    out = tmp_path / "disc"
+    build_disc(source, out, Media.BD25, TsMuxer(tsmuxer))
+    # menu_seconds: our oracle reads without real-time pacing, so it can race through a short menu
+    # clip and loop it (resetting the IG state) while it is still waiting for a page switch to
+    # settle; a long clip gives it room. Real playback is paced and never needs this.
+    add_menu(
+        out / "BDMV", probe(source).video[0], TsMuxer(tsmuxer), chapters=probe(source).chapters, menu_seconds=90
+    )
+    return out
+
+
+def test_libbluray_navigates_into_scenes_and_a_chosen_scene_jumps_to_its_mark(disc_with_scenes, libbluray_tool):
+    lines = play_disc(libbluray_tool, disc_with_scenes, "down", "enter", "right", "right", "enter")
+    statuses = [line for line in lines if line.startswith("STATUS")]
+    assert statuses == [
+        "STATUS page=0 button=2",  # down: Scenes selected on the main page
+        "STATUS page=1 button=1",  # enter: the Scenes page opens, scene 1 selected by default
+        "STATUS page=1 button=2",  # right
+        "STATUS page=1 button=3",  # right
+        "STATUS page=1 button=3",  # enter: activating scene 3 does not change the selection
+    ]
+    after_pick = lines[[i for i, line in enumerate(lines) if line == "KEY enter"][1] :]  # the second enter
+    assert "EVENT TITLE 1" in after_pick  # the movie starts
+    assert "EVENT CHAPTER 3" in after_pick  # at scene 3 (1-based)
+    assert after_pick.index("EVENT TITLE 1") < after_pick.index("EVENT CHAPTER 3")
+
+
 def test_adding_a_menu_twice_is_refused(disc_with_menu, tsmuxer):
     movie = probe(disc_with_menu / "BDMV" / "STREAM" / "00000.m2ts").video[0]
     with pytest.raises(MenuError, match="already exists"):

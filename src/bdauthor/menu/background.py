@@ -105,7 +105,12 @@ def write_black_video(
 
 
 def mux_menu_clip(
-    muxer: Muxer, video: VideoStream, segments: list[bytes], work_dir: Path, title: PilImage.Image | None = None
+    muxer: Muxer,
+    video: VideoStream,
+    segments: list[bytes],
+    work_dir: Path,
+    title: PilImage.Image | None = None,
+    seconds: int = MENU_SECONDS,
 ) -> Path:
     """Mux the black video and the IG `segments` into `work_dir`; returns the BDMV directory written.
 
@@ -113,7 +118,7 @@ def mux_menu_clip(
     be converted with `convert_graphics_to_interactive`.
     """
     source = work_dir / "menu-background.mkv"
-    write_black_video(source, video, title=title)
+    write_black_video(source, video, seconds=seconds, title=title)
     graphics = work_dir / "menu-graphics.sup"
     graphics.write_bytes(pgs_carrier(segments))
     output = work_dir / "menu-disc"

@@ -127,6 +127,6 @@ def build_disc(
 
     bdmv_dir = output_dir / "BDMV"
     if menu:
-        add_menu(bdmv_dir, info.video[0], muxer, title=menu_title)
+        add_menu(bdmv_dir, info.video[0], muxer, title=menu_title, chapters=info.chapters)
     size = verify_output(bdmv_dir, info, media)
     return BuildResult(bdmv_dir=bdmv_dir, size_bytes=size, report=report)

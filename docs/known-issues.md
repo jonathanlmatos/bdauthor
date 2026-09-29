@@ -44,13 +44,15 @@ The Blu-ray spec does not define red-laser media. A BDMV folder burned on DVD ("
 
 ### Chapters are not invented (by design)
 
-mkv chapters become playlist marks (`--custom-chapters`). If the mkv has none, the disc has a single mark at the start. Future menu work (scene selection) will need to decide what to do about that.
+mkv chapters become playlist marks (`--custom-chapters`). If the mkv has none, the disc has a single mark at the start, and the menu shows no Scenes page (see below).
 
 ## Menu (Phase 2, in progress)
 
 ### `bdauthor build --menu` is experimental (open)
 
-It adds a menu with a single Play button (`--menu`) and an optional title above it (`--menu-title`); the disc opens with it. The chapters screen is a later milestone. Interlaced video and frame rates without an IG code are refused before the mux starts.
+It adds a menu with a Play button (`--menu`), an optional title above it (`--menu-title`), and a Scenes page (a grid of numbered buttons, one per chapter mark, plus Back) whenever the source has more than one chapter -- no separate flag. Interlaced video and frame rates without an IG code are refused before the mux starts.
+
+Each scene button sets GPR0 to its mark index, then jumps to title 1; the movie's own MovieObject (the same one tsMuxeR writes) reads that register and calls `PLAY_PL_MK` with it, resetting GPR0 to 0 afterwards -- so a plain Play still starts at the beginning. The mark index is computed the same way tsMuxeR computes them for the playlist (`chapter_marks`), so a scene button always lands where its number says even with duplicate or out-of-order chapter timestamps. Page switching (Scenes / Back) uses `SET_BUTTON_PAGE`, an IG-only command (10.4.3.4 (D) of the spec): it only works inside a button's own navigation commands, not in a plain MovieObject.bdmv program.
 
 The title is composited directly onto the black background clip (not part of the IG stream, since it is static and does not need button states): rendered once with Pillow, alpha-blended against black in RGB before converting to limited-range BT.709 YCbCr (so the blend math is correct, not just the button-image quantised-palette path), then written into every frame's Y/Cb/Cr planes respecting `line_size`/stride.
 

@@ -344,3 +344,22 @@ def test_relabel_playlist_refuses_another_stream(muxed_menu):
     data = (bdmv / "PLAYLIST" / "00000.mpls").read_bytes()
     with pytest.raises(PlaylistError, match="not the expected"):
         relabel_graphics_as_interactive(data, **{**_RELABEL, "old_pid": 0x1300})
+
+
+# --- SET_BUTTON_PAGE (IG button command) -----------------------------------------------------------
+
+
+def test_set_button_page_word_layout(libbluray_tool, tmp_path):
+    from bdauthor.navigation.movie_object import set_button_page
+
+    output = dump_program(libbluray_tool, tmp_path, [MovieObject((set_button_page(page_id=3, button_id=7),))])
+    assert re.search(r"SET_BUTTON_PAGE\s+0x80000007,\s*0x80000003", output)
+
+
+def test_set_button_page_rejects_out_of_range_ids():
+    from bdauthor.navigation.movie_object import set_button_page
+
+    with pytest.raises(ValueError, match="page id"):
+        set_button_page(page_id=0xFF, button_id=0)
+    with pytest.raises(ValueError, match="button id"):
+        set_button_page(page_id=0, button_id=0x10000)

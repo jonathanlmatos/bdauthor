@@ -5,10 +5,10 @@ import tempfile
 from pathlib import Path
 
 from bdauthor.bdav import IG_PID, IG_STREAM_TYPE, PGS_PID, PGS_STREAM_TYPE, BdavError, convert_graphics_to_interactive
-from bdauthor.menu.background import MenuError, check_video_supported, mux_menu_clip
+from bdauthor.menu.background import MENU_SECONDS, MenuError, check_video_supported, mux_menu_clip
 from bdauthor.menu.programs import menu_navigation
 from bdauthor.menu.simple import MenuGraphicsError, frame_rate_code, simple_menu
-from bdauthor.model import VideoStream
+from bdauthor.model import Chapter, VideoStream
 from bdauthor.mux.base import Muxer
 from bdauthor.navigation import write_navigation
 from bdauthor.navigation.clip_info import ClipInfoError, program_map_pid, relabel_stream
@@ -58,19 +58,30 @@ def check_menu_supported(video: VideoStream) -> None:
         raise MenuError(str(exc)) from exc
 
 
-def add_menu(bdmv_dir: Path, video: VideoStream, muxer: Muxer, title: str | None = None) -> None:
+def add_menu(
+    bdmv_dir: Path,
+    video: VideoStream,
+    muxer: Muxer,
+    title: str | None = None,
+    chapters: tuple[Chapter, ...] = (),
+    menu_seconds: int | None = None,
+) -> None:
     """Add a looping menu with a Play button to the disc in `bdmv_dir`; it plays first.
 
     The movie (clip/playlist 00000, as written by the muxer) becomes title 1. `video` is the
     movie's video stream: the menu clip has its resolution and frame rate. `title` is shown above
     the button, rendered onto the menu's background clip (it is static, so it is not part of the IG).
+    `chapters` adds a Scenes page when there is more than one chapter mark. `menu_seconds`
+    overrides how long the looping background clip is (mainly for tests: a longer clip gives a
+    slow, unpaced reader like our test oracle room to navigate several pages before it loops).
     """
     try:
-        graphics = simple_menu(video, title=title)
+        graphics = simple_menu(video, title=title, chapters=chapters)
     except MenuGraphicsError as exc:
         raise MenuError(str(exc)) from exc
+    seconds = MENU_SECONDS if menu_seconds is None else menu_seconds
     with tempfile.TemporaryDirectory(prefix="bdauthor-menu-") as tmp:
-        menu_bdmv = mux_menu_clip(muxer, video, graphics.segments(), Path(tmp), title=graphics.title)
+        menu_bdmv = mux_menu_clip(muxer, video, graphics.segments(), Path(tmp), title=graphics.title, seconds=seconds)
         _copy_menu_clip(menu_bdmv, bdmv_dir)
     index, objects = menu_navigation(movie_playlist=int(_MOVIE_CLIP), menu_playlist=int(MENU_CLIP))
     write_navigation(bdmv_dir, index, objects)

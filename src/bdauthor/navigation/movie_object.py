@@ -69,6 +69,15 @@ class SetOp(IntEnum):
     MOVE = 1
 
 
+class SetSubGroup(IntEnum):
+    SET = 0
+    SETSYSTEM = 1
+
+
+class SetSystem(IntEnum):
+    SET_BUTTON_PAGE = 3
+
+
 @dataclass(frozen=True)
 class Operand:
     value: int
@@ -189,7 +198,22 @@ def move(dst: Operand, src: Operand) -> Instruction:
     """Copy `src` (a register or a constant) into the register `dst`."""
     if dst.immediate:
         raise ValueError("the destination of move must be a register")
-    return Instruction(Group.SET, 0, SetOp.MOVE, dst, src)
+    return Instruction(Group.SET, SetSubGroup.SET, SetOp.MOVE, dst, src)
+
+
+def set_button_page(page_id: int, button_id: int) -> Instruction:
+    """As an IG button's command: switch to `page_id` and select `button_id` on it, with no effect.
+
+    Only meaningful inside a button's own navigation commands (an interactive composition), not in
+    a plain MovieObject.bdmv program, where the player interprets it differently (10.4.3.4 (D)).
+    """
+    if not 0 <= page_id <= 0xFE:
+        raise ValueError(f"page id out of range: {page_id}")
+    if not 0 <= button_id <= 0xFFFF:
+        raise ValueError(f"button id out of range: {button_id}")
+    dst = imm(0x80000000 | button_id)  # bit 31: button flag
+    src = imm(0x80000000 | page_id)  # bit 31: page flag; bit 30 (unset): play the page's effects
+    return Instruction(Group.SET, SetSubGroup.SETSYSTEM, SetSystem.SET_BUTTON_PAGE, dst, src)
 
 
 @dataclass(frozen=True)

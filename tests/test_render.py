@@ -41,11 +41,21 @@ def test_the_indexed_image_reproduces_the_button():
     assert all(abs(a - b) <= 4 for a, b in zip(body[:3], (y, cr, cb)))
 
 
-def test_to_indexed_needs_images_of_the_same_width():
-    with pytest.raises(ValueError, match="same width"):
-        to_indexed([PilImage.new("RGBA", (10, 5)), PilImage.new("RGBA", (12, 5))], palette_id=0)
+def test_to_indexed_needs_images_of_the_same_height():
+    with pytest.raises(ValueError, match="same height"):
+        to_indexed([PilImage.new("RGBA", (10, 5)), PilImage.new("RGBA", (10, 7))], palette_id=0)
     with pytest.raises(ValueError, match="no images"):
         to_indexed([], palette_id=0)
+
+
+def test_to_indexed_allows_different_widths():
+    narrow = draw_button("1", 100, 60, DEFAULT_COLORS.normal)
+    wide = draw_button("Back", 300, 60, DEFAULT_COLORS.normal)
+    palette, (narrow_image, wide_image) = to_indexed([narrow, wide], palette_id=0)
+    assert (narrow_image.width, narrow_image.height) == (100, 60)
+    assert (wide_image.width, wide_image.height) == (300, 60)
+    assert len(narrow_image.pixels) == 100 * 60
+    assert len(wide_image.pixels) == 300 * 60
 
 
 @pytest.mark.parametrize(("width", "height", "size", "position"), [(1920, 1080, (360, 90), (780, 835)), (1280, 720, (240, 60), (520, 557))])
@@ -83,3 +93,72 @@ def test_draw_title_is_centred():
     right = draw_title("Hi", 400, 60)
     # same text at the same size draws the same image regardless of canvas content around it
     assert left.tobytes() == right.tobytes()
+
+
+# --- the scene-selection menu layout -----------------------------------------------------------
+
+from bdauthor.menu.ig import NONE_ID
+from bdauthor.menu.simple import BACK_BUTTON, MOVIE_TITLE, PAGE_MAIN, PAGE_SCENES, PLAY_BUTTON, SCENES_BUTTON
+from bdauthor.model import Chapter
+from bdauthor.navigation.movie_object import imm, jump_title, move, reg, set_button_page
+
+
+def make_chapter(start: float) -> Chapter:
+    return Chapter(start=start, end=start + 100, title=None)
+
+
+def menu_with_chapters(count: int, **kwargs):
+    chapters = tuple(make_chapter(i * 100) for i in range(count))
+    return simple_menu(video(width=1280, height=720), chapters=chapters, **kwargs)
+
+
+def test_no_chapters_or_a_single_chapter_means_no_scenes_page():
+    for graphics in (menu_with_chapters(0), menu_with_chapters(1)):
+        assert len(graphics.composition.pages) == 1
+        assert [b.id for b in graphics.composition.pages[0].buttons] == [PLAY_BUTTON]
+
+
+def test_more_than_one_chapter_adds_a_scenes_button_and_page():
+    graphics = menu_with_chapters(3)
+    pages = {p.id: p for p in graphics.composition.pages}
+    assert set(pages) == {PAGE_MAIN, PAGE_SCENES}
+    assert {b.id for b in pages[PAGE_MAIN].buttons} == {PLAY_BUTTON, SCENES_BUTTON}
+    assert {b.id for b in pages[PAGE_SCENES].buttons} == {0, 1, 2, 3}  # Back + 3 scenes
+
+
+def test_every_scene_button_jumps_to_its_own_mark():
+    graphics = menu_with_chapters(4)
+    scenes_page = next(p for p in graphics.composition.pages if p.id == PAGE_SCENES)
+    for button in scenes_page.buttons:
+        if button.id == BACK_BUTTON:
+            continue
+        mark_index = button.id - 1
+        assert button.commands == (move(reg(0), imm(mark_index)), jump_title(imm(MOVIE_TITLE)))
+
+
+def test_the_back_button_returns_to_the_main_page():
+    graphics = menu_with_chapters(3)
+    scenes_page = next(p for p in graphics.composition.pages if p.id == PAGE_SCENES)
+    back = next(b for b in scenes_page.buttons if b.id == BACK_BUTTON)
+    assert back.commands == (set_button_page(PAGE_MAIN, PLAY_BUTTON),)
+
+
+def test_scene_button_images_have_no_name_collisions_and_use_the_shared_palette():
+    graphics = menu_with_chapters(12)
+    ids = [image.id for image in graphics.images]
+    assert len(ids) == len(set(ids))  # every state image has a unique id
+    assert len(graphics.palettes) == 1
+    for page in graphics.composition.pages:
+        assert page.palette_id == graphics.palettes[0].id
+
+
+def test_scene_grid_neighbours_are_consistent_with_position():
+    graphics = menu_with_chapters(7)  # two rows of a 5-column grid
+    scenes_page = next(p for p in graphics.composition.pages if p.id == PAGE_SCENES)
+    by_id = {b.id: b for b in scenes_page.buttons}
+    assert by_id[1].left == NONE_ID and by_id[1].right == 2
+    assert by_id[5].right == NONE_ID
+    assert by_id[6].upper == 1  # directly below button 1 (same column)
+    assert by_id[6].left == NONE_ID and by_id[6].right == 7
+    assert by_id[6].lower == BACK_BUTTON  # last row -> Back
+    assert by_id[BACK_BUTTON].upper == 6  # Back -> first button of the last row

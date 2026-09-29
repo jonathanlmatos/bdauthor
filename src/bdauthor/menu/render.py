@@ -38,6 +38,14 @@ def draw_button(label: str, width: int, height: int, colors: tuple[RGBA, RGBA]) 
     return image
 
 
+def button_states(label: str, width: int, height: int) -> list[PilImage.Image]:
+    """The three images (normal, selected, activated) of one button."""
+    return [
+        draw_button(label, width, height, colors)
+        for colors in (DEFAULT_COLORS.normal, DEFAULT_COLORS.selected, DEFAULT_COLORS.activated)
+    ]
+
+
 def draw_title(text: str, width: int, height: int) -> PilImage.Image:
     """The movie title, centred, on a transparent background; `height` is the text's own box."""
     image = PilImage.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -57,17 +65,17 @@ def rgb_to_ycrcb(red: int, green: int, blue: int) -> tuple[int, int, int]:
 
 
 def to_indexed(images: list[PilImage.Image], palette_id: int, first_object_id: int = 0) -> tuple[Palette, list[Image]]:
-    """Quantise `images` (same width) to one shared palette; returns the IG palette and image objects."""
+    """Quantise `images` (same height) to one shared palette; returns the IG palette and image objects."""
     if not images:
         raise ValueError("no images")
-    width = images[0].width
-    if any(image.width != width for image in images):
-        raise ValueError("all images must have the same width")
-    sheet = PilImage.new("RGBA", (width, sum(image.height for image in images)), (0, 0, 0, 0))
-    top = 0
+    height = images[0].height
+    if any(image.height != height for image in images):
+        raise ValueError("all images must have the same height")
+    sheet = PilImage.new("RGBA", (sum(image.width for image in images), height), (0, 0, 0, 0))
+    left = 0
     for image in images:
-        sheet.paste(image, (0, top))
-        top += image.height
+        sheet.paste(image, (left, 0))
+        left += image.width
     indexed = sheet.quantize(colors=_MAX_COLORS, method=PilImage.Quantize.FASTOCTREE, dither=PilImage.Dither.NONE)
 
     flat = indexed.getpalette(rawmode="RGBA") or []
@@ -77,10 +85,13 @@ def to_indexed(images: list[PilImage.Image], palette_id: int, first_object_id: i
         y, cr, cb = rgb_to_ycrcb(red, green, blue)
         entries[index] = (y, cr, cb, alpha)
 
-    pixels = indexed.tobytes()
-    objects, offset = [], 0
+    sheet_width = sum(image.width for image in images)
+    row_bytes = indexed.tobytes()  # one byte per pixel, row-major over the whole sheet
+    objects, left = [], 0
     for number, image in enumerate(images):
-        size = image.width * image.height
-        objects.append(Image(first_object_id + number, image.width, image.height, pixels[offset : offset + size]))
-        offset += size
+        pixels = b"".join(
+            row_bytes[row * sheet_width + left : row * sheet_width + left + image.width] for row in range(height)
+        )
+        objects.append(Image(first_object_id + number, image.width, image.height, pixels))
+        left += image.width
     return Palette(palette_id, entries), objects

@@ -9,7 +9,9 @@
  *
  * KEY is one of: enter, up, down, left, right, popup, root.
  * -v shows libbluray's own log messages (silenced otherwise).
- * Output, one item per line: "OVERLAY ...", "EVENT NAME value", "KEY name", "DONE ...".
+ * Output, one item per line: "OVERLAY ...", "EVENT NAME value", "KEY name",
+ * "STATUS page=N button=N" (read directly from the player's registers, right after the key: no
+ * guessing how long a navigation command takes to settle), "DONE ...".
  */
 
 #include <inttypes.h>
@@ -18,16 +20,19 @@
 #include <string.h>
 
 #include "bluray.h"
+#include "bluray_internal.h"  /* bdpriv_reg_read: the only way to read PSR10/PSR11 from a BLURAY* */
 #include "decoders/overlay.h"
 #include "keys.h"
+#include "register.h"
 #include "util/log_control.h"
 
-#define SETTLE_READS 40 /* reads between two key presses, to let the navigation commands run */
 #define IDLE_LIMIT 400  /* consecutive empty reads before giving up */
 #define MAX_END_OF_TITLE 12 /* the menu playlist loops for ever: stop after a few rounds */
+#define SETTLE_READS 60 /* cap while waiting for a key's redraw (a FLUSH) after sending it */
 
 static int overlays_drawn;
 static int end_of_titles;
+static int flush_seen; /* set by overlay_cb; the signal that a key's navigation command finished */
 
 static void silent_log(const char *message)
 {
@@ -54,6 +59,9 @@ static void overlay_cb(void *handle, const struct bd_overlay_s *const ov)
     }
     if (ov->cmd == BD_OVERLAY_DRAW && ov->plane == BD_OVERLAY_IG) {
         overlays_drawn++;
+    }
+    if (ov->cmd == BD_OVERLAY_FLUSH && ov->plane == BD_OVERLAY_IG) {
+        flush_seen = 1;
     }
     printf("OVERLAY plane=%s cmd=%s pts=%" PRId64 " x=%d y=%d w=%d h=%d\n", plane_name(ov->plane),
            command_name(ov->cmd), ov->pts, ov->x, ov->y, ov->w, ov->h);
@@ -149,39 +157,65 @@ int main(int argc, char *argv[])
 
     char *next_key = keys ? strtok(keys, ",") : NULL;
     long total = 0;
-    int idle = 0, since_key = SETTLE_READS;
+    int idle = 0;
     uint8_t buf[6144];
     BD_EVENT ev;
+    int stop = 0;
 
-    while (total < max_bytes) {
-        int n = bd_read_ext(bd, buf, sizeof buf, &ev);
-        if (n < 0) {
-            break;
-        }
-        total += n;
-        print_event(&ev);
-        if (ev.event == BD_EVENT_END_OF_TITLE && ++end_of_titles >= MAX_END_OF_TITLE) {
-            break;
-        }
-        idle = (n == 0 && ev.event == BD_EVENT_NONE) ? idle + 1 : 0;
-        if (idle > IDLE_LIMIT) {
-            break;
-        }
-        since_key++;
-        if (next_key && overlays_drawn && since_key >= SETTLE_READS) {
-            int code = key_code(next_key);
-            if (code < 0) {
-                fprintf(stderr, "unknown key: %s\n", next_key);
-                break;
-            }
-            printf("KEY %s\n", next_key);
-            bd_user_input(bd, -1, code | BD_VK_KEY_PRESSED);
-            bd_user_input(bd, -1, code | BD_VK_KEY_TYPED);
-            bd_user_input(bd, -1, code | BD_VK_KEY_RELEASED);
-            next_key = strtok(NULL, ",");
-            since_key = 0;
-        }
+    /* One read, with the usual bookkeeping. Returns 0 to keep going, 1 to stop. */
+#define READ_STEP()                                                                     \
+    do {                                                                                \
+        int n = bd_read_ext(bd, buf, sizeof buf, &ev);                                  \
+        if (n < 0) {                                                                    \
+            stop = 1;                                                                   \
+            break;                                                                      \
+        }                                                                               \
+        total += n;                                                                     \
+        print_event(&ev);                                                              \
+        if (ev.event == BD_EVENT_END_OF_TITLE && ++end_of_titles >= MAX_END_OF_TITLE) { \
+            stop = 1;                                                                   \
+            break;                                                                      \
+        }                                                                               \
+        idle = (n == 0 && ev.event == BD_EVENT_NONE) ? idle + 1 : 0;                    \
+        if (idle > IDLE_LIMIT || total >= max_bytes) {                                  \
+            stop = 1;                                                                   \
+        }                                                                               \
+    } while (0)
+
+    while (!stop && !overlays_drawn) {  /* wait for the menu to appear */
+        READ_STEP();
     }
+
+    while (!stop && next_key) {
+        int code = key_code(next_key);
+        if (code < 0) {
+            fprintf(stderr, "unknown key: %s\n", next_key);
+            break;
+        }
+        printf("KEY %s\n", next_key);
+        fflush(stdout);
+        bd_user_input(bd, -1, code | BD_VK_KEY_PRESSED);
+        bd_user_input(bd, -1, code | BD_VK_KEY_TYPED);
+        bd_user_input(bd, -1, code | BD_VK_KEY_RELEASED);
+
+        /* SET_BUTTON_PAGE (and similar) is queued as an HDMV event, not applied inside
+         * bd_user_input(): read until the resulting redraw (a FLUSH) is seen, so the PSRs below
+         * are the settled result of this key, not a stale value from before it. */
+        flush_seen = 0;
+        for (int reads = 0; !stop && !flush_seen && reads < SETTLE_READS; reads++) {
+            READ_STEP();
+        }
+        printf(
+            "STATUS page=%u button=%u\n", bdpriv_reg_read(bd, 1, PSR_MENU_PAGE_ID),
+            bdpriv_reg_read(bd, 1, PSR_SELECTED_BUTTON_ID));
+        fflush(stdout);
+        next_key = strtok(NULL, ",");
+    }
+
+    while (!stop) {
+        READ_STEP();
+    }
+#undef READ_STEP
 
     printf("DONE bytes=%ld overlays=%d\n", total, overlays_drawn);
     bd_close(bd);
