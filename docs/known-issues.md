@@ -56,6 +56,14 @@ It adds a menu with a single Play button (`--menu`); the disc opens with it. The
 
 `bd_menu_test` (libbluray) draws the button at the right place and ENTER starts the movie. Not yet opened in VLC or on a hardware player. Things a stricter player might reject, all unverified: the IG stream has PES timestamps with PTS only (no DTS), ICS reserved bits are 0 rather than 1, the PMT entry for the IG stream has no descriptors, and the menu clip has no audio.
 
+### Play causes a several-second stall in VLC (open, VLC-specific as far as we can tell)
+
+- **Observed:** in VLC 3.0.18, clicking Play (or pressing Enter) on the menu button correctly jumps to title 1 and starts the movie, but the video freezes on the yellow (activated) button for several seconds first, even when clicked immediately after the menu appears (so it is not proportional to how long the menu had been looping).
+- **Ruled out:** `tools/oracle/bd_menu_test.c` (raw libbluray, no VLC) performs the same title jump in ~20ms — the disc, the movie object commands and the IG stream are not the cause. It is also not the audio-device negotiation (`too low audio sample frequency` / spdif fallback resolves instantly) and not the continuous `blend error: no matching alpha blending routine (chroma: YUVA -> DX11)` noise (present at a constant rate throughout, unrelated to the stall).
+- **Likely cause:** VLC's own TS demux teardown/rebuild when switching Blu-ray titles (the log shows it recreating the `ts` demux module and looping through `Draining...` ~14 times before the switch completes). This looks like a characteristic of VLC's software implementation, not of our disc.
+- **Why unresolved:** a real BD-J commercial disc, tested the same way, showed no delay — but BD-J discs typically keep the movie title already loaded and draw the menu as a Java overlay on top of it, never doing a title switch at all when Play is pressed. That is not a comparable test. We have no HDMV-menu commercial disc to compare against, and cannot rule out that a real hardware player's Blu-ray stack (built for fast title switches, unlike general-purpose software playback) handles this without any perceptible delay.
+- **What to do:** treat this as open until the hardware player test. If it also stalls there, revisit the disc structure (e.g. a popup-style menu that never leaves the movie's title, instead of a separate menu title) rather than tuning VLC.
+
 ### The menu clip is video only and progressive only (open)
 
 - The black clip has no audio stream. The spec does not require one, but a hardware player that dislikes silent menus would need a silent AC3 track added.
