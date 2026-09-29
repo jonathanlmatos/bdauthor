@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 import typer
 from rich.console import Console
@@ -43,6 +43,10 @@ def build(
         bool,
         typer.Option("--menu", help="Add a menu with a Play button that the disc opens with (experimental)."),
     ] = False,
+    menu_title: Annotated[
+        Optional[str],
+        typer.Option("--menu-title", help="Movie name shown above the Play button; requires --menu."),
+    ] = None,
 ) -> None:
     """Remux a compatible media file into a BDMV directory (video is never re-encoded)."""
     tsmuxer = find_tsmuxer()
@@ -68,6 +72,7 @@ def build(
                 force=force,
                 transcode_audio=transcode_audio,
                 menu=menu,
+                menu_title=menu_title,
                 on_progress=lambda percent: progress.update(mux_task, completed=percent, visible=True),
                 on_transcode_progress=lambda percent: progress.update(
                     transcode_task, completed=percent, visible=True

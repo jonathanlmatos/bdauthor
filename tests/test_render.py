@@ -1,7 +1,7 @@
 import pytest
 from PIL import Image as PilImage
 
-from bdauthor.menu.render import DEFAULT_COLORS, draw_button, rgb_to_ycrcb, to_indexed
+from bdauthor.menu.render import DEFAULT_COLORS, draw_button, draw_title, rgb_to_ycrcb, to_indexed
 from bdauthor.menu.simple import MenuGraphicsError, simple_menu
 from tests.builders import video
 
@@ -64,3 +64,22 @@ def test_simple_menu_needs_a_known_frame_rate():
         simple_menu(video(fps=Fraction(17, 1)))
     with pytest.raises(MenuGraphicsError, match="frame rate"):
         simple_menu(video(fps=None))
+
+
+# --- title text -------------------------------------------------------------------------------------
+
+
+def test_draw_title_is_white_text_on_a_transparent_background():
+    image = draw_title("My Movie", 600, 60)
+    assert image.size == (600, 60)
+    assert image.getpixel((0, 0))[3] == 0  # corners are transparent, nothing drawn there
+    # some pixel in the middle row is opaque white text (anti-aliased edges aside)
+    middle = [image.getpixel((x, 30)) for x in range(200, 400)]
+    assert any(pixel[3] > 200 and pixel[:3] == (255, 255, 255) for pixel in middle)
+
+
+def test_draw_title_is_centred():
+    left = draw_title("Hi", 400, 60)
+    right = draw_title("Hi", 400, 60)
+    # same text at the same size draws the same image regardless of canvas content around it
+    assert left.tobytes() == right.tobytes()

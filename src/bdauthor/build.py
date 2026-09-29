@@ -92,6 +92,7 @@ def build_disc(
     force: bool = False,
     transcode_audio: bool = False,
     menu: bool = False,
+    menu_title: str | None = None,
     on_progress: ProgressCallback | None = None,
     on_transcode_progress: ProgressCallback | None = None,
 ) -> BuildResult:
@@ -126,6 +127,6 @@ def build_disc(
 
     bdmv_dir = output_dir / "BDMV"
     if menu:
-        add_menu(bdmv_dir, info.video[0], muxer)
+        add_menu(bdmv_dir, info.video[0], muxer, title=menu_title)
     size = verify_output(bdmv_dir, info, media)
     return BuildResult(bdmv_dir=bdmv_dir, size_bytes=size, report=report)

@@ -49,8 +49,9 @@ src/bdauthor/
   build.py        # probe -> validate -> [re-encode audio] -> prepare output -> mux -> verify BDMV
   navigation/     # Phase 2 (M1): writers for index.bdmv (index.py) and MovieObject.bdmv (movie_object.py: instruction builders, pack_movie_objects); write_navigation() also writes the BACKUP/ copies
                   #   playlist.py: patches an .mpls (retarget_playlist, clip_ids, relabel_graphics_as_interactive); clip_info.py: patches a .clpi (relabel_stream, program_map_pid)
+  menu/simple.py  #   simple_menu(video, label="Play", title=None); render.draw_title draws the title, composited onto the background clip (menu/background.py: title_position, write_black_video(..., title=...)) -- it is static, so it is not part of the IG
   bdav.py         # .m2ts patching: convert_graphics_to_interactive (PID 0x1200 -> 0x1400, PMT stream type 0x90 -> 0x91 + CRC, ICS type 0x16 -> 0x18), crc32_mpeg
-  menu/           # Phase 2: add_menu(bdmv_dir, video, muxer) adds a looping menu with a Play button (clip/playlist 00001, movie = title 1); `bdauthor build --menu` uses it (check_menu_supported runs before the mux)
+  menu/           # Phase 2: add_menu(bdmv_dir, video, muxer) adds a looping menu with a Play button (clip/playlist 00001, movie = title 1); `bdauthor build --menu [--menu-title NAME]` uses it (check_menu_supported runs before the mux)
                   #   ig.py = IG segment encoders (ICS, palette, object + RLE, END; pgs_carrier); render.py = Pillow buttons -> palette/indexed images;
                   #   simple.py = the Play-button menu; programs.py = which movie object does what; background.py = the black clip + the mux
 tools/oracle/     # bd_menu_test.c: our own libbluray-based oracle (plays a disc from the start, prints overlays/events, can press keys); built by the bootstrap workflow

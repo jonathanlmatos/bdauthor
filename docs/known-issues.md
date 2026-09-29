@@ -50,7 +50,9 @@ mkv chapters become playlist marks (`--custom-chapters`). If the mkv has none, t
 
 ### `bdauthor build --menu` is experimental (open)
 
-It adds a menu with a single Play button (`--menu`); the disc opens with it. The chapters screen and a title are later milestones. Interlaced video and frame rates without an IG code are refused before the mux starts.
+It adds a menu with a single Play button (`--menu`) and an optional title above it (`--menu-title`); the disc opens with it. The chapters screen is a later milestone. Interlaced video and frame rates without an IG code are refused before the mux starts.
+
+The title is composited directly onto the black background clip (not part of the IG stream, since it is static and does not need button states): rendered once with Pillow, alpha-blended against black in RGB before converting to limited-range BT.709 YCbCr (so the blend math is correct, not just the button-image quantised-palette path), then written into every frame's Y/Cb/Cr planes respecting `line_size`/stride.
 
 ### Interactive graphics are verified in libbluray only (open)
 

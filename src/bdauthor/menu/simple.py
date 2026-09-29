@@ -11,7 +11,9 @@ from bdauthor.menu.ig import (
     Palette,
     display_set,
 )
-from bdauthor.menu.render import DEFAULT_COLORS, draw_button, to_indexed
+from bdauthor.menu.render import DEFAULT_COLORS, draw_button, draw_title, to_indexed
+from PIL import Image as PilImage
+
 from bdauthor.model import VideoStream
 from bdauthor.navigation.movie_object import imm, jump_title
 
@@ -20,6 +22,7 @@ _REFERENCE_HEIGHT = 1080  # sizes below are for 1080p and scale with the video h
 _BUTTON_SIZE = (360, 90)
 _BOTTOM_MARGIN = 200
 MOVIE_TITLE = 1
+TITLE_HEIGHT_FRACTION = 0.08
 
 
 class MenuGraphicsError(Exception):
@@ -31,6 +34,7 @@ class MenuGraphics:
     composition: InteractiveComposition
     palettes: list[Palette]
     images: list[Image]
+    title: "PilImage.Image | None" = None  # composited onto the background clip, not part of the IG
 
     def segments(self) -> list[bytes]:
         return display_set(self.composition, self.palettes, self.images)
@@ -43,8 +47,8 @@ def frame_rate_code(video: VideoStream) -> int:
     return code
 
 
-def simple_menu(video: VideoStream, label: str = "Play") -> MenuGraphics:
-    """A page with one button that starts the movie (title 1)."""
+def simple_menu(video: VideoStream, label: str = "Play", title: str | None = None) -> MenuGraphics:
+    """A page with one button that starts the movie (title 1); `title` is the movie's name, shown above it."""
     code = frame_rate_code(video)
 
     scale = video.height / _REFERENCE_HEIGHT
@@ -70,4 +74,5 @@ def simple_menu(video: VideoStream, label: str = "Play") -> MenuGraphics:
     )
     page = Page(id=0, palette_id=palette.id, buttons=(button,), default_selected=PLAY_BUTTON)
     composition = InteractiveComposition(video.width, video.height, code, (page,))
-    return MenuGraphics(composition, [palette], images)
+    title_image = draw_title(title, video.width, round(video.height * TITLE_HEIGHT_FRACTION)) if title else None
+    return MenuGraphics(composition, [palette], images, title_image)

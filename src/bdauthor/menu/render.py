@@ -38,6 +38,15 @@ def draw_button(label: str, width: int, height: int, colors: tuple[RGBA, RGBA]) 
     return image
 
 
+def draw_title(text: str, width: int, height: int) -> PilImage.Image:
+    """The movie title, centred, on a transparent background; `height` is the text's own box."""
+    image = PilImage.new("RGBA", (width, height), (0, 0, 0, 0))
+    font = ImageFont.load_default(size=round(height * 0.7))
+    draw = ImageDraw.Draw(image)
+    draw.text((width / 2, height / 2), text, font=font, fill=(255, 255, 255, 255), anchor="mm")
+    return image
+
+
 def rgb_to_ycrcb(red: int, green: int, blue: int) -> tuple[int, int, int]:
     """BT.709 limited-range (Y, Cr, Cb), the colour space of HD Blu-ray graphics."""
     r, g, b = red / 255, green / 255, blue / 255

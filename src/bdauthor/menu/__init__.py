@@ -58,17 +58,19 @@ def check_menu_supported(video: VideoStream) -> None:
         raise MenuError(str(exc)) from exc
 
 
-def add_menu(bdmv_dir: Path, video: VideoStream, muxer: Muxer) -> None:
+def add_menu(bdmv_dir: Path, video: VideoStream, muxer: Muxer, title: str | None = None) -> None:
     """Add a looping menu with a Play button to the disc in `bdmv_dir`; it plays first.
 
     The movie (clip/playlist 00000, as written by the muxer) becomes title 1. `video` is the
-    movie's video stream: the menu clip has its resolution and frame rate.
+    movie's video stream: the menu clip has its resolution and frame rate. `title` is shown above
+    the button, rendered onto the menu's background clip (it is static, so it is not part of the IG).
     """
     try:
-        graphics = simple_menu(video)
+        graphics = simple_menu(video, title=title)
     except MenuGraphicsError as exc:
         raise MenuError(str(exc)) from exc
     with tempfile.TemporaryDirectory(prefix="bdauthor-menu-") as tmp:
-        _copy_menu_clip(mux_menu_clip(muxer, video, graphics.segments(), Path(tmp)), bdmv_dir)
+        menu_bdmv = mux_menu_clip(muxer, video, graphics.segments(), Path(tmp), title=graphics.title)
+        _copy_menu_clip(menu_bdmv, bdmv_dir)
     index, objects = menu_navigation(movie_playlist=int(_MOVIE_CLIP), menu_playlist=int(MENU_CLIP))
     write_navigation(bdmv_dir, index, objects)

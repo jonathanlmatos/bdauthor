@@ -109,3 +109,15 @@ def test_build_with_menu_refuses_unsupported_video_before_muxing(good_mkv, tmp_p
     assert result.exit_code == ExitCode.BUILD_FAILED
     assert "menu: menus for interlaced video" in result.output
     assert not out.exists()  # nothing was written
+
+
+def test_build_with_menu_title_shows_it_and_play_still_works(good_mkv, tmp_path, tsmuxer, libbluray_tool):
+    out = tmp_path / "disc"
+    result = runner.invoke(app, ["build", str(good_mkv), "-o", str(out), "--menu", "--menu-title", "My Movie"])
+    assert result.exit_code == ExitCode.OK, result.output
+
+    played = subprocess.run(
+        [str(libbluray_tool("bd_menu_test")), "-k", "enter", str(out)], capture_output=True, text=True, timeout=60
+    ).stdout.splitlines()
+    assert "EVENT MENU 1" in played
+    assert "EVENT TITLE 1" in played[played.index("KEY enter") :]

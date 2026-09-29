@@ -9,7 +9,8 @@ import av
 import pytest
 
 from bdauthor.menu import MENU_CLIP, MenuError, add_menu
-from bdauthor.menu.background import MENU_SECONDS, write_black_video
+from bdauthor.menu.background import MENU_SECONDS, title_position, write_black_video
+from bdauthor.menu.render import draw_title
 from bdauthor.menu.programs import menu_navigation
 from bdauthor.menu.simple import simple_menu
 from bdauthor.model import VideoStream
@@ -50,6 +51,35 @@ def test_black_video_is_black_not_green(tmp_path):
     write_black_video(path, stream(width=640, height=360), seconds=1)
     for row in luma_rows(path, 640):
         assert all(15 <= value <= 17 for value in row)  # limited-range black is 16
+
+
+def test_black_video_with_a_title_draws_white_text_near_the_top_and_stays_black_elsewhere(tmp_path):
+    v = stream(width=640, height=360)
+    title = draw_title("My Movie", 300, 30)
+    path = tmp_path / "black.mkv"
+    write_black_video(path, v, seconds=1, title=title)
+
+    x, y = title_position(v, title.width, title.height)
+    with av.open(str(path)) as container:
+        frame = next(container.decode(video=0))
+        plane = frame.planes[0]
+        data = bytes(plane)
+
+        def row(r):
+            return data[r * plane.line_size : r * plane.line_size + v.width]
+
+        # somewhere in the title's row there is bright text; the corners are still black
+        assert max(row(y + title.height // 2)) > 200
+        assert max(row(0)) <= 17
+        assert max(row(v.height - 1)) <= 17
+
+
+def test_title_position_is_centred_horizontally_and_near_the_top():
+    v = stream(width=1280, height=720)
+    x, y = title_position(v, 400, 60)
+    assert x == (1280 - 400) // 2
+    assert 0 < y < 100
+    assert x % 2 == 0 and y % 2 == 0  # even, so chroma subsampling stays aligned
 
 
 def test_black_video_refuses_interlaced_and_unknown_rates(tmp_path):
@@ -93,7 +123,7 @@ def disc_with_menu(tsmuxer_disc, tmp_path, tsmuxer):
     disc = tmp_path / "disc"
     shutil.copytree(tsmuxer_disc, disc)
     movie = probe(next((tsmuxer_disc / "BDMV" / "STREAM").glob("00000.m2ts"))).video[0]
-    add_menu(disc / "BDMV", movie, TsMuxer(tsmuxer))
+    add_menu(disc / "BDMV", movie, TsMuxer(tsmuxer), title="My Movie")
     return disc
 
 
@@ -156,6 +186,27 @@ def test_libbluray_runs_first_playback_into_a_looping_menu(disc_with_menu, libbl
     assert "jumping to object 1" in output
     assert f"PLAYLIST:                 {MENU_CLIP}.mpls" in output
     assert output.count("Playing playlist done") >= 2  # it started again by itself
+
+
+def test_the_menu_clip_shows_the_title_above_the_button(disc_with_menu):
+    movie = probe(disc_with_menu / "BDMV" / "STREAM" / "00000.m2ts").video[0]
+    title = draw_title("My Movie", 300, round(movie.height * 0.08))
+    x, y = title_position(movie, title.width, title.height)
+    with av.open(str(disc_with_menu / "BDMV" / "STREAM" / f"{MENU_CLIP}.m2ts")) as container:
+        frame = next(container.decode(video=0))
+        plane = frame.planes[0]
+        data = bytes(plane)
+        row = data[(y + title.height // 2) * plane.line_size : (y + title.height // 2) * plane.line_size + movie.width]
+    assert max(row[x : x + title.width]) > 200  # bright text somewhere in the title's row
+
+
+def test_a_menu_without_a_title_has_no_text_in_the_clip(tsmuxer_disc, tmp_path, tsmuxer):
+    disc = tmp_path / "disc"
+    shutil.copytree(tsmuxer_disc, disc)
+    movie = probe(next((tsmuxer_disc / "BDMV" / "STREAM").glob("00000.m2ts"))).video[0]
+    add_menu(disc / "BDMV", movie, TsMuxer(tsmuxer))  # no title
+    for row in luma_rows(disc / "BDMV" / "STREAM" / f"{MENU_CLIP}.m2ts", movie.width):
+        assert all(15 <= value <= 17 for value in row)
 
 
 def test_adding_a_menu_twice_is_refused(disc_with_menu, tsmuxer):
