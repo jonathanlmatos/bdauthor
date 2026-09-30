@@ -112,6 +112,31 @@ tests/            # pytest; builders.py = model factories, conftest.py builds sy
 
 ## IG menus (how they get into the disc)
 
-- tsMuxeR cannot mux interactive graphics, but it carries PGS `.sup` files and drops unknown segment types. So the IG segments go in as a `.sup` (`ig.pgs_carrier`, the ICS disguised as PGS type 0x16), tsMuxeR writes them as a PGS stream (PID 0x1200, one segment per PES packet, PTS only), and afterwards `bdav.convert_graphics_to_interactive`, `clip_info.relabel_stream` and `playlist.relabel_graphics_as_interactive` relabel it as IG (PID 0x1400, coding type 0x91, playlist STN counters PG 1->0 / IG 0->1). Only fixed-size fields change, so packet timing and the EP map stay valid.
-- Raw `.sup` streams have no track id in tsMuxeR's meta (`Track.id is None`).
-- Verified with libbluray only (VLC and hardware pending): the ICS reserved bits are written as 0, and the IG has no DTS (tsMuxeR writes PTS only); a strict player may care.
+- tsMuxeR cannot mux interactive graphics at all (not even disguised as PGS with no video/audio
+  track: "Can't create EP map. One audio or video stream is needed."), so the IG stream is never
+  muxed through it. It is written from scratch as its own out-of-mux clip (`stream_model = 1`,
+  matching how a real commercial disc delivers a menu; see `docs/hdmv-ig-notes.md`):
+  `menu.ig_clip.build_ig_clip` writes a complete standalone `.m2ts` (PAT, PMT, periodic PCR, the
+  IG segments as `private_stream_1` PES, `dts`/`pts` kept `decode_gap` ticks apart, padded to a
+  whole number of 6144-byte aligned units), `navigation.clip_info_writer.build_clip_info` writes
+  its CLIPINF (`application_type = 0x05`), and `navigation.playlist.add_subpath` adds it to the
+  menu's own playlist as a SubPath (type 3), registering its IG stream on PlayItem 0's STN table
+  (`stream_type = 2`: subpath + subclip + PID). The muxer only ever writes the menu's plain black
+  background video (clip `00001`); the IG clip is clip `00002`, added afterward by `menu/__init__.py`.
+- A clip's file size must be a whole number of 6144-byte ("aligned unit") chunks: libbluray's
+  preloader for a SubPath reads it in fixed 6144-byte blocks and silently fails past a short final
+  block, which shows up as `bd_menu_test` finding the SubPath and selecting its IG stream but never
+  drawing anything (`_preload_m2ts(): error loading ... at N` with `-v` and `BD_DEBUG_MASK` set) --
+  found and fixed while wiring this up; `build_ig_clip` now pads with null-PID (`0x1FFF`) packets.
+- The menu's looping background is `navigation.playlist.loop_play_item`: it repeats the
+  background PlayItem (seamlessly connected, an exact byte copy including its IG SubPath STN
+  entry) **500 times flat** (`menu._MENU_LOOP_REPEATS`), matching a real commercial disc's own
+  repeat count, instead of the MovieObject re-selecting a short playlist in a loop -- which
+  reopens it and resets the IG menu back to its first page every time (confirmed against
+  libbluray's own player source; see `docs/hdmv-ig-notes.md`). The repeat *count* is what was
+  matched, not the disc's total duration (390 minutes): opening a playlist re-reads and
+  re-parses its clip's CLIPINF once per PlayItem regardless of duplicates (`_fill_clip` in
+  libbluray's `navigation.c`), so chasing the same total duration with our own much shorter
+  clip would need many more repeats -- and measurably slower menu navigation on a real player,
+  invisible in our own filesystem-cached test suite.
+- Verified with libbluray only (VLC and hardware pending): the ICS reserved bits are written as 0.

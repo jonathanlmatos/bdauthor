@@ -6,17 +6,7 @@
 """
 
 from bdauthor.navigation.index import HdmvRef, IndexTable, PlaybackType, Title
-from bdauthor.navigation.movie_object import (
-    MovieObject,
-    break_,
-    imm,
-    jump_object,
-    jump_title,
-    move,
-    play_pl,
-    play_pl_mk,
-    reg,
-)
+from bdauthor.navigation.movie_object import MovieObject, break_, imm, jump_title, move, play_pl, play_pl_mk, reg
 
 MOVIE_OBJECT = 0
 MENU_OBJECT = 1
@@ -34,7 +24,11 @@ def menu_navigation(*, movie_playlist: int = 0, menu_playlist: int = 1) -> tuple
             break_(),
         )
     )
-    show_menu = MovieObject((play_pl(imm(menu_playlist)), jump_object(imm(MENU_OBJECT))))
+    # JUMP_TITLE(0) is the reserved "go to top menu" title number (BLURAY_TITLE_TOP_MENU in
+    # libbluray), not a jump to a specific object: a real commercial disc's own Top Menu
+    # object returns to itself exactly this way once its (equally long-looping) menu playlist
+    # naturally ends, rather than a direct JUMP_OBJECT -- see docs/hdmv-ig-notes.md.
+    show_menu = MovieObject((play_pl(imm(menu_playlist)), jump_title(imm(0))))
     start = MovieObject((jump_title(imm(0)),))  # title 0 is the top menu
 
     index = IndexTable(

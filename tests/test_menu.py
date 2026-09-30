@@ -50,7 +50,10 @@ def test_black_video_is_black_not_green(tmp_path):
     path = tmp_path / "black.mkv"
     write_black_video(path, stream(width=640, height=360), seconds=1)
     for row in luma_rows(path, 640):
-        assert all(15 <= value <= 17 for value in row)  # limited-range black is 16
+        # the background is black except for the moving bar (bright, limited-range white);
+        # nothing else (like a green tint) should show up anywhere
+        assert all(15 <= value <= 17 or value >= 200 for value in row)
+        assert any(value >= 200 for value in row)  # the bar is actually present in every row
 
 
 def test_black_video_with_a_title_draws_white_text_near_the_top_and_stays_black_elsewhere(tmp_path):
@@ -68,10 +71,9 @@ def test_black_video_with_a_title_draws_white_text_near_the_top_and_stays_black_
         def row(r):
             return data[r * plane.line_size : r * plane.line_size + v.width]
 
-        # somewhere in the title's row there is bright text; the corners are still black
+        # somewhere in the title's row there is bright text; elsewhere it's black or the bar
         assert max(row(y + title.height // 2)) > 200
-        assert max(row(0)) <= 17
-        assert max(row(v.height - 1)) <= 17
+        assert all(15 <= value <= 17 or value >= 200 for value in row(v.height - 1))
 
 
 def test_title_position_is_centred_horizontally_and_near_the_top():
@@ -111,7 +113,7 @@ def test_the_menu_object_plays_the_menu_playlist_in_a_loop(libbluray_tool, tmp_p
     ).stdout
     menu = output.split("Object 1:")[1].split("Object 2:")[0]
     assert re.search(r"PLAY_PL\s+1\b", menu)
-    assert re.search(r"JUMP_OBJECT\s+1\b", menu)  # back to itself
+    assert re.search(r"JUMP_TITLE\s+0\b", menu)  # back to the top menu (itself), like a real commercial disc
     assert re.search(r"JUMP_TITLE\s+0\b", output.split("Object 2:")[1])
 
 
@@ -137,7 +139,10 @@ def test_the_menu_clip_playlist_and_backups_are_added(disc_with_menu):
         ).read_bytes()
     for name in ("index.bdmv", "MovieObject.bdmv"):
         assert (bdmv / name).read_bytes() == (bdmv / "BACKUP" / name).read_bytes()
-    assert clip_ids((bdmv / "PLAYLIST" / f"{MENU_CLIP}.mpls").read_bytes()) == [MENU_CLIP]
+    # the background PlayItem is repeated (seamlessly) to outlast any realistic session
+    # instead of the MovieObject reopening a short playlist in a loop, see docs/hdmv-ig-notes.md
+    ids = clip_ids((bdmv / "PLAYLIST" / f"{MENU_CLIP}.mpls").read_bytes())
+    assert len(ids) > 1 and set(ids) == {MENU_CLIP}
 
 
 def test_the_movie_is_left_untouched(disc_with_menu, tsmuxer_disc):
@@ -206,7 +211,8 @@ def test_a_menu_without_a_title_has_no_text_in_the_clip(tsmuxer_disc, tmp_path, 
     movie = probe(next((tsmuxer_disc / "BDMV" / "STREAM").glob("00000.m2ts"))).video[0]
     add_menu(disc / "BDMV", movie, TsMuxer(tsmuxer))  # no title
     for row in luma_rows(disc / "BDMV" / "STREAM" / f"{MENU_CLIP}.m2ts", movie.width):
-        assert all(15 <= value <= 17 for value in row)
+        # black or the moving bar only -- no text/graphics snuck in without a title
+        assert all(15 <= value <= 17 or value >= 200 for value in row)
 
 
 @pytest.fixture
@@ -226,12 +232,7 @@ def disc_with_scenes(tmp_path_factory, tmp_path, tsmuxer):
     )
     out = tmp_path / "disc"
     build_disc(source, out, Media.BD25, TsMuxer(tsmuxer))
-    # menu_seconds: our oracle reads without real-time pacing, so it can race through a short menu
-    # clip and loop it (resetting the IG state) while it is still waiting for a page switch to
-    # settle; a long clip gives it room. Real playback is paced and never needs this.
-    add_menu(
-        out / "BDMV", probe(source).video[0], TsMuxer(tsmuxer), chapters=probe(source).chapters, menu_seconds=90
-    )
+    add_menu(out / "BDMV", probe(source).video[0], TsMuxer(tsmuxer), chapters=probe(source).chapters)
     return out
 
 
@@ -271,15 +272,17 @@ def play_disc(libbluray_tool, disc, *keys):
 
 
 def test_libbluray_lists_an_interactive_graphics_stream_in_the_menu_clip(disc_with_menu, libbluray_tool):
+    """The IG stream is a separate, out-of-mux SubPath clip, matching a real commercial disc."""
     bdmv = disc_with_menu / "BDMV"
     playlist = subprocess.run(
         [str(libbluray_tool("mpls_dump")), "-i", str(bdmv / "PLAYLIST" / f"{MENU_CLIP}.mpls")],
         capture_output=True,
         text=True,
     ).stdout
+    assert "SubPath Id: 00" in playlist
     assert "Interactive Graphics Stream 0" in playlist and "PID: 1400" in playlist
     clip = subprocess.run(
-        [str(libbluray_tool("clpi_dump")), "-p", str(bdmv / "CLIPINF" / f"{MENU_CLIP}.clpi")],
+        [str(libbluray_tool("clpi_dump")), "-p", str(bdmv / "CLIPINF" / "00002.clpi")],
         capture_output=True,
         text=True,
     ).stdout

@@ -14,3 +14,6 @@ vendor/
 
 # Test caches
 .pytest_cache/
+
+# Session notes/scratch (never committed; also see AGENTS.md)
+*_temp.*

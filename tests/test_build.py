@@ -3,10 +3,11 @@ import subprocess
 
 import pytest
 
-from bdauthor.build import REQUIRED_FILES, BuildError, CheckFailed, build_disc
+from bdauthor.build import REQUIRED_FILES, BuildError, CheckFailed, auto_chapters, build_disc
 from bdauthor.model import Media
 from bdauthor.mux.base import MuxError
 from bdauthor.mux.tsmuxer import TsMuxer
+from bdauthor.probe import ProbeError
 
 
 class FakeMuxer:
@@ -20,6 +21,7 @@ class FakeMuxer:
 
     def mux(self, request, on_progress=None):
         self.calls += 1
+        self.last_request = request
         if self.error:
             raise self.error
         for name in self.files:
@@ -114,6 +116,40 @@ def test_real_mux_carries_chapters_and_audio_language(make_mkv, tmp_path, tsmuxe
     output = subprocess.run([str(tsmuxer), str(playlist)], capture_output=True, text=True).stdout
     assert "Marks: 00:00:00.000 00:00:00.500" in output
     assert "Stream lang: por" in output
+
+
+# --- auto chapters ----------------------------------------------------------
+
+
+def test_auto_chapters_marks_every_interval_starting_at_zero():
+    chapters = auto_chapters(duration=650.0, interval_minutes=5)
+    assert [c.start for c in chapters] == [0.0, 300.0, 600.0]
+    assert [c.end for c in chapters] == [300.0, 600.0, 650.0]
+
+
+def test_auto_chapters_is_empty_when_too_short_for_a_second_mark():
+    assert auto_chapters(duration=250.0, interval_minutes=5) == ()
+    assert auto_chapters(duration=300.0, interval_minutes=5) == ()
+
+
+def test_build_disc_adds_auto_chapters_when_the_source_has_none(make_mkv, tmp_path):
+    source = make_mkv("no_chapters.mkv", seconds=2)
+    muxer = FakeMuxer()
+    # FakeMuxer's stub .m2ts fails the post-mux probe done for verification; that happens after
+    # mux(), which is all this test needs -- what the muxer actually received.
+    with pytest.raises(ProbeError):
+        build_disc(source, tmp_path / "disc", Media.BD25, muxer, auto_chapters_minutes=0.01)  # 0.6s
+    starts = [c.start for c in muxer.last_request.info.chapters]
+    assert starts[0] == 0.0
+    assert len(starts) > 1
+
+
+def test_build_disc_keeps_the_source_chapters_when_it_already_has_some(make_mkv, tmp_path):
+    source = make_mkv("chapters.mkv", seconds=2, chapters=[(0.0, 1.0, "A"), (1.0, 2.0, "B")])
+    muxer = FakeMuxer()
+    with pytest.raises(ProbeError):
+        build_disc(source, tmp_path / "disc", Media.BD25, muxer, auto_chapters_minutes=0.01)
+    assert [c.start for c in muxer.last_request.info.chapters] == [0.0, 1.0]
 
 
 # --- audio transcoding with the real tsMuxeR -------------------------------

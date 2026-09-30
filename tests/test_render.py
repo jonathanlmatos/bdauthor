@@ -129,18 +129,23 @@ def test_more_than_one_chapter_adds_a_scenes_button_and_page():
 def test_every_scene_button_jumps_to_its_own_mark():
     graphics = menu_with_chapters(4)
     scenes_page = next(p for p in graphics.composition.pages if p.id == PAGE_SCENES)
+    title_reg = reg(4076)
     for button in scenes_page.buttons:
         if button.id == BACK_BUTTON:
             continue
         mark_index = button.id - 1
-        assert button.commands == (move(reg(0), imm(mark_index)), jump_title(imm(MOVIE_TITLE)))
+        assert button.commands == (
+            move(reg(0), imm(mark_index)),
+            move(title_reg, imm(MOVIE_TITLE)),
+            jump_title(title_reg),
+        )
 
 
 def test_the_back_button_returns_to_the_main_page():
     graphics = menu_with_chapters(3)
     scenes_page = next(p for p in graphics.composition.pages if p.id == PAGE_SCENES)
     back = next(b for b in scenes_page.buttons if b.id == BACK_BUTTON)
-    assert back.commands == (set_button_page(PAGE_MAIN, PLAY_BUTTON),)
+    assert back.commands == set_button_page(PAGE_MAIN, PLAY_BUTTON)
 
 
 def test_scene_button_images_have_no_name_collisions_and_use_the_shared_palette():

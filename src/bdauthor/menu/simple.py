@@ -76,9 +76,12 @@ class _ButtonSpec:
     right: int = NONE_ID
 
 
+_TITLE_REG = reg(4076)  # scratch GPR JUMP_TITLE reads its target from -- matches a real disc's own commands
+
+
 def _chapter_jump(mark_index: int) -> tuple[Instruction, ...]:
     """Play the movie (title 1) starting at `mark_index` (see `chapter_marks`)."""
-    return move(reg(0), imm(mark_index)), jump_title(imm(MOVIE_TITLE))
+    return move(reg(0), imm(mark_index)), move(_TITLE_REG, imm(MOVIE_TITLE)), jump_title(_TITLE_REG)
 
 
 def _main_page_specs(video: VideoStream, scale: float, has_scenes: bool) -> list[_ButtonSpec]:
@@ -92,7 +95,7 @@ def _main_page_specs(video: VideoStream, scale: float, has_scenes: bool) -> list
         width=width,
         height=height,
         label="Play",
-        commands=(jump_title(imm(MOVIE_TITLE)),),
+        commands=(move(_TITLE_REG, imm(MOVIE_TITLE)), jump_title(_TITLE_REG)),
         lower=SCENES_BUTTON if has_scenes else NONE_ID,
     )
     if not has_scenes:
@@ -104,7 +107,7 @@ def _main_page_specs(video: VideoStream, scale: float, has_scenes: bool) -> list
         width=width,
         height=height,
         label="Scenes",
-        commands=(set_button_page(PAGE_SCENES, 1),),
+        commands=set_button_page(PAGE_SCENES, 1),
         upper=PLAY_BUTTON,
     )
     return [play, scenes]
@@ -150,7 +153,7 @@ def _scenes_page_specs(video: VideoStream, scale: float, marks: list[int]) -> tu
         width=width,
         height=height,
         label="Back",
-        commands=(set_button_page(PAGE_MAIN, PLAY_BUTTON),),
+        commands=set_button_page(PAGE_MAIN, PLAY_BUTTON),
         upper=first_of_last_row + 1,
     )
     return specs, back
@@ -216,6 +219,6 @@ def simple_menu(video: VideoStream, title: str | None = None, chapters: tuple[Ch
         }
         pages.append(_build_page(PAGE_SCENES, scene_and_back, 1, palette.id, scene_image_ids))
 
-    composition = InteractiveComposition(video.width, video.height, code, tuple(pages))
+    composition = InteractiveComposition(video.width, video.height, code, tuple(pages), stream_model=1)
     title_image = draw_title(title, video.width, round(video.height * TITLE_HEIGHT_FRACTION)) if title else None
     return MenuGraphics(composition, [palette], ig_images, title_image)

@@ -194,9 +194,10 @@ class InteractiveComposition:
     pages: tuple[Page, ...]
     composition_number: int = 0
     state: CompositionState = CompositionState.EPOCH_START
+    stream_model: int = 0  # 0: multiplexed with the video ("in-mux"); 1: a separate SubPath clip
     pop_up: bool = False  # False: always-on menu; True: the viewer opens it with a key
-    composition_timeout_pts: int = 0  # 0 = the menu never closes by itself
-    selection_timeout_pts: int = 0  # 0 = the selected button is never activated by itself
+    composition_timeout_pts: int = 0  # 0 = the menu never closes by itself; only sent when stream_model == 0
+    selection_timeout_pts: int = 0  # 0 = the selected button is never activated by itself; ditto
     user_timeout_duration: int = 0
 
     def pack(self) -> bytes:
@@ -205,8 +206,9 @@ class InteractiveComposition:
         for value in (self.composition_timeout_pts, self.selection_timeout_pts):
             if not 0 <= value < 2**33:
                 raise ValueError("timeouts are 33-bit PTS values")
-        composition = struct.pack(">B", self.pop_up << 6)  # stream_model 0: multiplexed with the video
-        composition += _u40(self.composition_timeout_pts) + _u40(self.selection_timeout_pts)
+        composition = struct.pack(">B", (self.stream_model << 7) | (self.pop_up << 6))
+        if self.stream_model == 0:  # out-of-mux compositions omit these two fields entirely, see docs
+            composition += _u40(self.composition_timeout_pts) + _u40(self.selection_timeout_pts)
         composition += _u24(self.user_timeout_duration) + struct.pack(">B", len(self.pages))
         composition += b"".join(page.pack() for page in self.pages)
 
@@ -237,16 +239,20 @@ def display_set(
     ]
 
 
-# tsMuxeR only carries PGS segment types (0x14-0x17, 0x80) and drops anything else, so an ICS goes
-# in disguised as a PGS composition segment; `convert_graphics_to_interactive` puts the real type back.
-_DISGUISED_ICS = 0x16
+PTS_CLOCK_HZ = 90_000
+MIN_DECODE_GAP_PTS = 9_000  # 100 ms floor: even a tiny display set needs some decode time
+_LINEAR_GROWTH_THRESHOLD_BYTES = 8_000  # below this, the floor alone covers it
+_DECODE_RATE_BYTES_PER_SEC = 600_000  # conservative decode rate; a real commercial menu showed ~580 KB/s
 
 
-def pgs_carrier(segments: list[bytes], pts: int = 0) -> bytes:
-    """The segments as a .sup file (records of "PG", PTS, DTS, segment), for tsMuxeR to mux as PGS."""
-    out = bytearray()
-    for data in segments:
-        if data[0] == Segment.INTERACTIVE_COMPOSITION:
-            data = bytes([_DISGUISED_ICS]) + data[1:]
-        out += b"PG" + struct.pack(">II", pts, pts) + data
-    return bytes(out)
+def decode_gap(total_bytes: int) -> int:
+    """PTS ticks to keep between decoding and presenting a display set this big.
+
+    A decoder needs real time to decode a composition (plus its palettes and images) before it can
+    show it; sending it with `dts == pts` (as if decoding took no time at all) is not something a
+    real commercial disc ever does, and is a plausible cause of decoders stalling or blanking on our
+    menus. `MIN_DECODE_GAP_PTS` covers any display set, growing linearly above
+    `_LINEAR_GROWTH_THRESHOLD_BYTES` at `_DECODE_RATE_BYTES_PER_SEC`.
+    """
+    extra = max(0, total_bytes - _LINEAR_GROWTH_THRESHOLD_BYTES)
+    return MIN_DECODE_GAP_PTS + round(extra * PTS_CLOCK_HZ / _DECODE_RATE_BYTES_PER_SEC)

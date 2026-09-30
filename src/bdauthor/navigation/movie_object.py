@@ -82,11 +82,12 @@ class SetSystem(IntEnum):
 class Operand:
     value: int
     immediate: bool = False
+    raw: bool = False  # bypasses the register-range check: SET_BUTTON_PAGE's "flags | register number" operand
 
     def __post_init__(self) -> None:
         if not 0 <= self.value <= 0xFFFFFFFF:
             raise ValueError(f"operand out of range: {self.value}")
-        if not self.immediate and self.value > _MAX_REGISTER:
+        if not self.immediate and not self.raw and self.value > _MAX_REGISTER:
             raise ValueError(f"register out of range: r{self.value}")
 
 
@@ -201,19 +202,41 @@ def move(dst: Operand, src: Operand) -> Instruction:
     return Instruction(Group.SET, SetSubGroup.SET, SetOp.MOVE, dst, src)
 
 
-def set_button_page(page_id: int, button_id: int) -> Instruction:
+_BUTTON_PAGE_BUTTON_REG = 4076  # scratch GPRs SET_BUTTON_PAGE reads its ids through -- see below
+_BUTTON_PAGE_PAGE_REG = 4077  # matches a real commercial disc's own choice of registers exactly
+
+
+def _button_page_operand(flag_bits: int, register: int) -> Operand:
+    """The operand SET_BUTTON_PAGE resolves as `flags | a value read from this register` (10.4.3.4
+    (D)): libbluray's own decoder (`hdmv_vm.c`, `_read_setbuttonpage_reg`) treats a non-immediate
+    SET_BUTTON_PAGE operand as `flags(2 bits) | register_number(12 bits)`, not a plain register
+    operand -- reading the actual id from whatever that register holds, rather than encoding the id
+    directly in the instruction. A real commercial disc's own menu does exactly this (confirmed by
+    decoding its own button commands; see docs/hdmv-ig-notes.md), never an immediate operand here.
+    """
+    return Operand(flag_bits << 30 | register, immediate=False, raw=True)
+
+
+def set_button_page(page_id: int, button_id: int) -> tuple[Instruction, ...]:
     """As an IG button's command: switch to `page_id` and select `button_id` on it, with no effect.
 
-    Only meaningful inside a button's own navigation commands (an interactive composition), not in
-    a plain MovieObject.bdmv program, where the player interprets it differently (10.4.3.4 (D)).
+    Matches a real commercial disc's own encoding byte-for-byte: `button_id`/`page_id` are moved
+    into scratch registers first, and SET_BUTTON_PAGE references those registers rather than
+    embedding the ids as immediates. Only meaningful inside a button's own navigation commands (an
+    interactive composition), not in a plain MovieObject.bdmv program, where the player interprets
+    it differently (10.4.3.4 (D)).
     """
     if not 0 <= page_id <= 0xFE:
         raise ValueError(f"page id out of range: {page_id}")
     if not 0 <= button_id <= 0xFFFF:
         raise ValueError(f"button id out of range: {button_id}")
-    dst = imm(0x80000000 | button_id)  # bit 31: button flag
-    src = imm(0x80000000 | page_id)  # bit 31: page flag; bit 30 (unset): play the page's effects
-    return Instruction(Group.SET, SetSubGroup.SETSYSTEM, SetSystem.SET_BUTTON_PAGE, dst, src)
+    dst = _button_page_operand(0b10, _BUTTON_PAGE_BUTTON_REG)  # bit 31: button flag
+    src = _button_page_operand(0b10, _BUTTON_PAGE_PAGE_REG)  # bit 31: page flag; bit 30 (unset): play the effects
+    return (
+        move(reg(_BUTTON_PAGE_BUTTON_REG), imm(button_id)),
+        move(reg(_BUTTON_PAGE_PAGE_REG), imm(page_id)),
+        Instruction(Group.SET, SetSubGroup.SETSYSTEM, SetSystem.SET_BUTTON_PAGE, dst, src),
+    )
 
 
 @dataclass(frozen=True)

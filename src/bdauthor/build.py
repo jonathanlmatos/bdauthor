@@ -2,12 +2,12 @@
 
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from bdauthor.bdmv import REQUIRED_FILES, directory_size, missing_files
 from bdauthor.menu import add_menu, check_menu_supported
-from bdauthor.model import Media, MediaInfo, Report
+from bdauthor.model import Chapter, Media, MediaInfo, Report
 from bdauthor.mux.base import Muxer, MuxRequest, ProgressCallback
 from bdauthor.probe import probe
 from bdauthor.transcode import encode_ac3, validate_with_audio_transcode
@@ -83,6 +83,25 @@ def verify_output(bdmv_dir: Path, info: MediaInfo, media: Media) -> int:
     return size
 
 
+def auto_chapters(duration: float, interval_minutes: float) -> tuple[Chapter, ...]:
+    """Chapter marks every `interval_minutes`, starting at 0, for a source with no real chapters.
+
+    Empty if the source is not long enough for at least one mark beyond the start.
+    """
+    interval = interval_minutes * 60
+    if interval <= 0 or duration <= interval:
+        return ()
+    starts = [0.0]
+    t = interval
+    while t < duration:
+        starts.append(t)
+        t += interval
+    return tuple(
+        Chapter(start=start, end=(starts[i + 1] if i + 1 < len(starts) else duration), title=None)
+        for i, start in enumerate(starts)
+    )
+
+
 def build_disc(
     source: Path,
     output_dir: Path,
@@ -93,6 +112,7 @@ def build_disc(
     transcode_audio: bool = False,
     menu: bool = False,
     menu_title: str | None = None,
+    auto_chapters_minutes: float | None = None,
     on_progress: ProgressCallback | None = None,
     on_transcode_progress: ProgressCallback | None = None,
 ) -> BuildResult:
@@ -100,10 +120,15 @@ def build_disc(
 
     With `transcode_audio`, incompatible audio streams are re-encoded to AC3 first; video and
     subtitles are never re-encoded. With `menu`, a menu with a Play button is added and plays first.
+    With `auto_chapters_minutes`, a source that has no chapters of its own gets marks every N
+    minutes instead (so the Scenes menu page has something to show); a source that already has
+    chapters is left alone.
 
     Raises ProbeError, CheckFailed, TranscodeError, BuildError, MenuError or MuxError.
     """
     info = probe(source)
+    if auto_chapters_minutes is not None and not info.chapters and info.duration:
+        info = replace(info, chapters=auto_chapters(info.duration, auto_chapters_minutes))
     if transcode_audio:
         report, plans = validate_with_audio_transcode(info, media)
     else:

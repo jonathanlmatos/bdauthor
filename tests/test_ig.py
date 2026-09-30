@@ -19,6 +19,7 @@ from bdauthor.menu.ig import (
     Page,
     Palette,
     Segment,
+    decode_gap,
     display_set,
     encode_rle,
     end_segment,
@@ -236,3 +237,10 @@ def test_display_set_order():
         [Image(1, 1, 1, bytes([1])), Image(2, 1, 1, bytes([1]))],
     )
     assert [segment_[0] for segment_ in segments] == [0x18, 0x14, 0x15, 0x15, 0x80]
+
+
+def test_decode_gap_has_a_floor_and_grows_linearly_above_a_threshold():
+    small_gap = decode_gap(0)
+    assert small_gap == decode_gap(8_000) > 0  # the floor covers anything up to the threshold
+    assert decode_gap(8_100) > small_gap  # and it grows past it
+    assert decode_gap(16_000) > decode_gap(12_000)  # monotonically

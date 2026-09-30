@@ -47,6 +47,14 @@ def build(
         Optional[str],
         typer.Option("--menu-title", help="Movie name shown above the Play button; requires --menu."),
     ] = None,
+    auto_chapters: Annotated[
+        Optional[float],
+        typer.Option(
+            "--auto-chapters",
+            help="If the source has no chapters, add one every N minutes instead "
+            "(so --menu has a Scenes page to show). Does nothing if the source already has chapters.",
+        ),
+    ] = None,
 ) -> None:
     """Remux a compatible media file into a BDMV directory (video is never re-encoded)."""
     tsmuxer = find_tsmuxer()
@@ -73,6 +81,7 @@ def build(
                 transcode_audio=transcode_audio,
                 menu=menu,
                 menu_title=menu_title,
+                auto_chapters_minutes=auto_chapters,
                 on_progress=lambda percent: progress.update(mux_task, completed=percent, visible=True),
                 on_transcode_progress=lambda percent: progress.update(
                     transcode_task, completed=percent, visible=True

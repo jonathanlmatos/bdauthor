@@ -42,9 +42,9 @@ tsMuxeR creates `CERTIFICATE/BACKUP/` plus empty `BDMV/AUXDATA`, `BDMV/BDJO`, `B
 
 The Blu-ray spec does not define red-laser media. A BDMV folder burned on DVD ("BD5"/"BD9") only plays on players that choose to support it, and a plain DVD player will not play it at all. `--media dvd5|dvd9` only changes the capacity budget. AVCHD would be the standardised option for DVD media but has a very limited menu.
 
-### Chapters are not invented (by design)
+### Chapters are not invented unless asked (by design)
 
-mkv chapters become playlist marks (`--custom-chapters`). If the mkv has none, the disc has a single mark at the start, and the menu shows no Scenes page (see below).
+mkv chapters become playlist marks (`--custom-chapters`). If the mkv has none, the disc has a single mark at the start, and the menu shows no Scenes page (see below) -- unless `build --auto-chapters N` is given, which adds a mark every N minutes for a source that has none of its own (a source that already has chapters is never overridden).
 
 ## Menu (Phase 2, in progress)
 
@@ -58,21 +58,20 @@ The title is composited directly onto the black background clip (not part of the
 
 ### Interactive graphics are verified in libbluray only (open)
 
-`bd_menu_test` (libbluray) draws the button at the right place and ENTER starts the movie. Not yet opened in VLC or on a hardware player. Things a stricter player might reject, all unverified: the IG stream has PES timestamps with PTS only (no DTS), ICS reserved bits are 0 rather than 1, the PMT entry for the IG stream has no descriptors, and the menu clip has no audio.
+`bd_menu_test` (libbluray) draws the button at the right place and ENTER starts the movie. The IG delivery model, ICS bit layout, timing and playlist-loop structure were reverse-engineered against a real commercial disc and matched field-by-field; see `docs/hdmv-ig-notes.md` for the full findings. Not yet opened on a hardware player.
 
-### Play causes a several-second stall in VLC (open, VLC-specific as far as we can tell)
+### Play stall and Scenes freeze in VLC/Kodi (resolved -- was our own background video codec)
 
-- **Observed:** in VLC 3.0.18, clicking Play (or pressing Enter) on the menu button correctly jumps to title 1 and starts the movie, but the video freezes on the yellow (activated) button for several seconds first, even when clicked immediately after the menu appears (so it is not proportional to how long the menu had been looping).
-- **Ruled out:** `tools/oracle/bd_menu_test.c` (raw libbluray, no VLC) performs the same title jump in ~20ms — the disc, the movie object commands and the IG stream are not the cause. It is also not the audio-device negotiation (`too low audio sample frequency` / spdif fallback resolves instantly) and not the continuous `blend error: no matching alpha blending routine (chroma: YUVA -> DX11)` noise (present at a constant rate throughout, unrelated to the stall).
-- **Likely cause:** VLC's own TS demux teardown/rebuild when switching Blu-ray titles (the log shows it recreating the `ts` demux module and looping through `Draining...` ~14 times before the switch completes). This looks like a characteristic of VLC's software implementation, not of our disc.
-- **Why unresolved:** a real BD-J commercial disc, tested the same way, showed no delay — but BD-J discs typically keep the movie title already loaded and draw the menu as a Java overlay on top of it, never doing a title switch at all when Play is pressed. That is not a comparable test. We have no HDMV-menu commercial disc to compare against, and cannot rule out that a real hardware player's Blu-ray stack (built for fast title switches, unlike general-purpose software playback) handles this without any perceptible delay.
-- **What to do:** treat this as open until the hardware player test. If it also stalls there, revisit the disc structure (e.g. a popup-style menu that never leaves the movie's title, instead of a separate menu title) rather than tuning VLC.
+- **Observed:** clicking Play or Scenes on the menu could take anywhere from several seconds to over a minute in VLC, and could freeze the video outright in Kodi a few seconds after the menu appeared, worsening the longer the menu looped.
+- **Investigated and ruled out, in order:** the SubPath/PlayItem-repeat architecture matching the reference disc byte-for-byte (still froze); the repeat count (2343 vs 500, matching the reference disc's own 501 -- froze either way); missing `PlayListMark` entries (added, matches the disc now, did not fix it alone); a real PCR discontinuity at the repeat boundary (confirmed present on the reference disc's own clip too, with no ill effect); `is_ATC_delta` (libbluray never reads it during playback).
+- **Actual root cause:** the menu's background video was H.264; the reference disc's own menu background is **MPEG-2**. Switching our encoder from `libx264` to `mpeg2video` (see `menu/background.py`) fixed both players, confirmed independently: VLC's response time dropped to 1-4 seconds and Kodi's freeze stopped happening entirely.
+- **Why this fixed it:** not fully traced at the libbluray/VLC internals level -- the working theory is that decoding continuous H.264 (which went through several failed hardware-decoder format negotiations visible in VLC's own log) left the video pipeline busy at exactly the moment a PlayItem transition or button command needed to be processed, in a way MPEG-2 (lighter, and BD-ROM's traditional choice for menu/still content) does not. See `docs/hdmv-ig-notes.md` §4.4 for the full investigation, including the leads that turned out to be red herrings.
+- **Still open:** not verified on a hardware player, or on Kodi/VLC versions other than the ones tested.
 
-### The menu clip is video only and progressive only (open)
+### The menu clip is progressive only (open)
 
-- The black clip has no audio stream. The spec does not require one, but a hardware player that dislikes silent menus would need a silent AC3 track added.
 - Interlaced movies (1080i) are refused with a clear error; the black clip would need interlaced encoding.
-- The clip is 10 seconds; the menu playlist restarts when it ends, which can show a brief hitch on some players (a seamless loop needs a different playlist structure).
+- The background clip loops by repeating its own PlayItem, seamlessly connected, inside the same playlist (matching a real commercial disc's own technique) rather than by a MovieObject reopening a short playlist -- see `docs/hdmv-ig-notes.md` §4 for why the naive approach resets the menu to its first page every loop.
 
 ### hdmv_test cannot see the menu
 
