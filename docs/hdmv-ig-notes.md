@@ -558,3 +558,104 @@ otherwise.
   only read the unencrypted navigation data); `bd_info` explicitly reports whether AACS
   is present, which is a fast way to know before attempting anything that touches the
   actual stream payloads (which are what is actually encrypted, not the navigation data).
+
+## 8. Second dissection pass: index.bdmv, MovieObject header flags, UO masks, EP_map, PlayItem fields
+
+A further round of field-by-field comparison against the reference disc, this time outside the
+IG clip itself: `index.bdmv`, `MovieObject.bdmv`'s own per-object header (not its button-command
+bodies, already covered in section 2), the playlist- and PlayItem-level User Operation mask
+tables, the IG clip's own CLIPINF `CPI`/EP_map, and the remaining PlayItem fields.
+
+### 8.1. `MovieObject.bdmv` header flags: First Playback/Top Menu are not resumable and mask Menu-call -- fixed
+
+`mobj_dump -d`'s header line for each object (`resume intention flag`, `menu call mask`, `title
+search mask`) was checked against the reference disc's own First Playback, Top Menu, and several
+movie-title objects:
+
+| Role | `resume_intention` | `menu_call_mask` | `title_search_mask` |
+|---|---|---|---|
+| First Playback | 0 | 1 | 1 |
+| Top Menu | 0 | 1 | 0 |
+| Movie title (checked on 3 different titles) | 1 | 0 | 0 |
+
+The pattern is coherent: a movie title is resumable and does not mask anything (both bits 0); a
+navigation object (First Playback, Top Menu) is not a resumable "position" and always masks the
+Menu-call UO (there is no reason to re-invoke the menu while already at a menu/navigation
+object); title search is additionally masked only during First Playback (blocked during whatever
+setup/intro it runs) but allowed once at the Top Menu (a numeric remote key can jump straight to
+a title from there).
+
+Our own `MovieObject` dataclass's defaults (`resume_intention=True, menu_call_mask=False,
+title_search_mask=False`) already matched the movie-title row exactly -- confirmed via the same
+three-object check on our own output before this fix, so `programs.py`'s `play_movie` needed no
+change. `show_menu`/`start` (Top Menu/First Playback) used those same class defaults, though,
+which do not match either navigation-object row above. Fixed in `menu.programs.menu_navigation`:
+`show_menu` now sets `resume_intention=False, menu_call_mask=True`; `start` additionally sets
+`title_search_mask=True`. Covered by
+`test_first_playback_and_top_menu_header_flags_match_the_reference_disc` in `tests/test_menu.py`.
+
+### 8.2. `index.bdmv`: structure confirmed matching; the one difference (`user_data`) is intentional
+
+`index.bdmv`'s `IndexTable()` shape (`object_type`/`access_type`/`playback_type`/`hdmv_object_id`
+for First Playback, Top Menu, and titles) was already being decoded correctly by `index_dump` on
+our own output in the first dissection pass, confirming the field layout in `navigation/index.py`
+matches libbluray's own parser. Checked again here at the raw-byte level for the `AppInfoBDMV()`
+block specifically (`reserved`, `video_format`/`frame_rate`, `user_data`): `reserved` and
+`video_format`/`frame_rate` are `0` on both discs (`video_format`/`frame_rate` = "unspecified",
+already documented as matching tsMuxeR's own convention). The reference disc's own `user_data`
+(32 bytes, all zero in ours) is **not** all zero on that disc -- it holds an ASCII string, almost
+certainly an authoring-tool/provider identifier. Not reproduced, and not a divergence to fix: per
+this repository's own rule against recording any real disc's identifying details, inventing a
+fake provider string would be actively wrong, and leaving it blank is a legitimate, real choice
+authoring tools make (nothing requires this field to be populated). Documented here as checked,
+not silently skipped.
+
+### 8.3. `AppInfoPlayList()`'s own UO_mask_table: non-zero and content-dependent on every playlist inspected -- not reproduced
+
+Distinct from the ICS-level `UO_mask_table` (already covered in section 1) and the PlayItem-level
+one (8.5), `AppInfoPlayList()` -- the block right after the MPLS header, before `PlayList()`
+itself, holding `playback_type`/`playback_count` plus its own 64-bit `UO_mask_table` -- was
+decoded at the raw-byte level (`mpls_dump` does not surface it, so this was done directly:
+`reserved(1) + playback_type(1) + playback_count(2) + UO_mask_table(8) + flags(1) + reserved(1)`,
+14 bytes total after the block's own `length` field, on every playlist checked).
+
+Every single playlist on the reference disc -- both of its menus and every movie title checked --
+has a **non-zero, and different**, `UO_mask_table`: e.g. the main menu's is `3cb805ff40000000`,
+a secondary menu's is `0000010f40000000`, and movie titles vary between `35bffdff40000000`,
+`3dbffdff40000000`, `0007fdff40000000`, `0007f9ff40000000`, `3007fdff40000000` depending on the
+title. This rules out a single fixed convention (like the PTS lead-in in 4.7): the values differ
+per playlist in a pattern consistent with reflecting *that playlist's own available features*
+(no doubt including things like angle change, secondary audio/video, or PG/subtitle change being
+masked when a given title doesn't carry those streams) rather than anything about being a menu
+specifically.
+
+Our own playlists (menu and movie alike) inherit an all-zero `UO_mask_table` from tsMuxeR's own
+MPLS template; nothing in this codebase writes to this block at all (`navigation/playlist.py`
+only ever patches clip ids, the STN table, and PlayItem repetition/marks -- confirmed by grep).
+Not fixed: without the BD-ROM spec text or libbluray's own `mpls_parse.c` source in hand to
+confirm each of the 64 bits' exact meaning, and given the values are clearly feature-dependent
+rather than a fixed constant, hand-deriving and hardcoding a plausible-looking bit pattern here
+would be guessing, not reverse-engineering, and risks masking a UO our own disc's menu actually
+needs. Flagged here as a confirmed, real, currently-unaddressed divergence rather than something
+quietly judged harmless.
+
+### 8.4. The IG clip's own CLIPINF has no EP_map/CPI either -- confirmed matching
+
+The reference disc's own out-of-mux IG clip's CLIPINF (`clpi_dump -i`) reports `Number Stream
+PID: 0` under `CPI` -- no EP_map entries at all, on both of the disc's two IG clips checked. This
+matches `clip_info_writer.build_clip_info`'s own `empty_cpi = struct.pack(">I", 0)` exactly: the
+IG SubPath clip is not meant to be randomly seekable on a real disc either, not just something
+our own short test clips happen to get away with. No fix needed; documented as confirmed.
+
+### 8.5. Remaining `PlayItem()` fields (`is_multi_angle`, `stc_id`, PlayItem-level UO mask, `still_mode`/`still_time`): confirmed matching
+
+Decoded directly from the raw bytes of each disc's menu PlayItem (offsets per the existing
+`_PLAY_ITEM_TO_STN` comment in `playlist.py`): `is_multi_angle=0`, `connection_condition` already
+covered (4.6/4.7), `stc_id=0`, the PlayItem-level `UO_mask_table` (a *separate* 8-byte field from
+`AppInfoPlayList()`'s own, see 8.3) is all-zero, and `still_mode=0`/`still_time=0` -- identical on
+both discs. These fields are entirely tsMuxeR's own output in our pipeline (`navigation/playlist.py`
+never writes or patches them, only reads past them to reach the STN table it does patch), so this
+confirms tsMuxeR's own defaults already happen to match the reference disc's menu PlayItem here,
+not something this codebase needed to change. A still-mode PlayItem does exist elsewhere on the
+reference disc (a separate still-image title, `still_time≈7s`), but that is unrelated content
+(a still-image title, not a menu), not something the menu path needs.

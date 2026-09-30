@@ -117,6 +117,27 @@ def test_the_menu_object_plays_the_menu_playlist_in_a_loop(libbluray_tool, tmp_p
     assert re.search(r"JUMP_TITLE\s+0\b", output.split("Object 2:")[1])
 
 
+def test_first_playback_and_top_menu_header_flags_match_the_reference_disc():
+    """Confirmed against a real commercial disc's own First Playback/Top Menu objects: neither is
+    resumable, both mask the Menu-call UO (already at a menu/navigation object), and only First
+    Playback additionally masks title search (allowed once at the Top Menu). A movie title object
+    (`play_movie`/MOVIE_OBJECT) keeps the class defaults instead, matching the reference disc's own
+    movie-title objects (resume_intention=True, both masks False) -- see docs/hdmv-ig-notes.md."""
+    _, objects = menu_navigation()
+    play_movie, show_menu, start = objects
+    assert (play_movie.resume_intention, play_movie.menu_call_mask, play_movie.title_search_mask) == (
+        True,
+        False,
+        False,
+    )
+    assert (show_menu.resume_intention, show_menu.menu_call_mask, show_menu.title_search_mask) == (
+        False,
+        True,
+        False,
+    )
+    assert (start.resume_intention, start.menu_call_mask, start.title_search_mask) == (False, True, True)
+
+
 # --- the assembled disc ---------------------------------------------------------------------------
 
 
