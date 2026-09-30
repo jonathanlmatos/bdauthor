@@ -29,8 +29,9 @@ def _clip_info(*, application_type: int, ts_recording_rate: int, num_source_pack
     return struct.pack(">I", len(body)) + body
 
 
-def _sequence_info(*, pcr_pid: int, presentation_end: int) -> bytes:
-    stc_seq = struct.pack(">HIII", pcr_pid, 0, 0, presentation_end)  # pcr_pid, spn_stc_start, start, end (45kHz)
+def _sequence_info(*, pcr_pid: int, presentation_start: int, presentation_end: int) -> bytes:
+    # pcr_pid, spn_stc_start, start, end (45kHz)
+    stc_seq = struct.pack(">HIII", pcr_pid, 0, presentation_start, presentation_end)
     atc_seq = struct.pack(">IBB", 0, 1, 0) + stc_seq  # spn_atc_start, num_stc_seq=1, offset_stc_id=0
     body = struct.pack(">BB", 0, 1) + atc_seq  # reserved(1), num_atc_seq=1
     return struct.pack(">I", len(body)) + body
@@ -52,18 +53,21 @@ def build_clip_info(
     stream_coding_type: int,
     num_source_packets: int,
     presentation_end: int,
+    presentation_start: int = 0,
     application_type: int = IG_APPLICATION_TYPE,
     ts_recording_rate: int = 6_000_000,
 ) -> bytes:
     """A complete `.clpi`, from scratch, for a clip with a single elementary stream.
 
-    `presentation_end` is in the CLPI's own 45 kHz clock (see docs/hdmv-ig-notes.md) -- half
-    the 90 kHz PES `PTS`/`DTS` clock the clip's own stream uses.
+    `presentation_start`/`presentation_end` are in the CLPI's own 45 kHz clock (see
+    docs/hdmv-ig-notes.md) -- half the 90 kHz PES `PTS`/`DTS` clock the clip's own stream uses.
     """
     clip_info = _clip_info(
         application_type=application_type, ts_recording_rate=ts_recording_rate, num_source_packets=num_source_packets
     )
-    sequence_info = _sequence_info(pcr_pid=pcr_pid, presentation_end=presentation_end)
+    sequence_info = _sequence_info(
+        pcr_pid=pcr_pid, presentation_start=presentation_start, presentation_end=presentation_end
+    )
     program_info = _program_info(pmt_pid=pmt_pid, pid=stream_pid, coding_type=stream_coding_type)
     empty_cpi = struct.pack(">I", 0)  # no EP map: this clip is not meant to be seekable
     empty_clip_mark = struct.pack(">I", 0)

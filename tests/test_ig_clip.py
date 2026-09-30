@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from bdauthor.bdav import IG_PID, IG_STREAM_TYPE
-from bdauthor.menu.ig import decode_gap, end_segment
+from bdauthor.menu.ig import Image, Segment, decode_gap, end_segment, segment
 from bdauthor.menu.ig_clip import PAT_PID, PCR_PID, PMT_PID, build_ig_clip
 from tests.ts_helpers import crc_is_valid, payload_of, pes_payloads, pid_counts, pmt_sections, transport_packets
 
@@ -91,21 +91,45 @@ def test_pcr_packets_carry_no_payload_and_a_valid_pcr_flag(tmp_path):
         assert pkt[5] & 0x10  # PCR_flag
 
 
-def test_dts_precedes_pts_by_the_decode_gap(tmp_path):
-    segments = [end_segment()]
+def _decode_timestamp(b):
+    return (b[0] >> 1 & 0x7) << 30 | b[1] << 22 | (b[2] >> 1) << 15 | b[3] << 7 | b[4] >> 1
+
+
+def test_dts_precedes_pts_by_the_object_decode_rate(tmp_path):
+    # an OBJECT (ODS) segment: on the reference disc these carry PTS+DTS, unlike PALETTE/END.
+    # 100x800 = 80,000 pixels: ceil(80_000 * 90_000 / 8_000_000) = 900 ticks, exactly, at BD-ROM's
+    # own HDMV object decode rate (see _OBJECT_DECODE_RATE).
+    image = Image(id=0, width=100, height=800, pixels=bytes(100 * 800))
+    segments = [image.pack()]
     gap = decode_gap(sum(len(s) for s in segments))
     p = tmp_path / "clip.m2ts"
     p.write_bytes(build_ig_clip(segments, seconds=1, pts=gap + 1000))
     packets = [pkt for pkt in transport_packets(p) if (pkt[1] & 0x1F) << 8 | pkt[2] == IG_PID]
     pes = payload_of(packets[0])
     assert pes[:3] == b"\x00\x00\x01"
+    assert pes[6] == 0x84  # data_alignment_indicator=1: matches the reference disc's own IG PES
     flags, header_len = pes[7], pes[8]
     assert flags == 0xC0  # PTS_DTS_flags = 11: both present
     pts_bytes, dts_bytes = pes[9:14], pes[14:19]
 
-    def decode(b):
-        return (b[0] >> 1 & 0x7) << 30 | b[1] << 22 | (b[2] >> 1) << 15 | b[3] << 7 | b[4] >> 1
-
-    assert decode(pts_bytes) == gap + 1000
-    assert decode(dts_bytes) == 1000
+    assert _decode_timestamp(dts_bytes) == 1000  # the clock starts at dts (no ICS ahead of it here)
+    assert _decode_timestamp(pts_bytes) == 1000 + 900
     assert header_len == 10
+
+
+def test_palette_and_end_segments_carry_pts_only(tmp_path):
+    # matches the reference disc's own IG clip: PALETTE and END are the only segment types that
+    # never carry a DTS, even when the composition/images do (see build_ig_clip's docstring)
+    segments = [segment(Segment.PALETTE, b"\x00"), end_segment()]
+    gap = decode_gap(sum(len(s) for s in segments))
+    p = tmp_path / "clip.m2ts"
+    p.write_bytes(build_ig_clip(segments, seconds=1, pts=gap + 1000))
+    packets = [pkt for pkt in transport_packets(p) if (pkt[1] & 0x1F) << 8 | pkt[2] == IG_PID]
+    starts = [pkt for pkt in packets if pkt[1] & 0x40]
+    assert len(starts) == 2
+    for pkt in starts:
+        pes = payload_of(pkt)
+        flags, header_len = pes[7], pes[8]
+        assert flags == 0x80  # PTS only, no DTS
+        assert header_len == 5
+        assert _decode_timestamp(pes[9:14]) == 1000

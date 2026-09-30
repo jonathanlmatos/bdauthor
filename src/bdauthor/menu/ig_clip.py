@@ -15,11 +15,12 @@ recording purposes; this does not affect playback correctness (BD playback timin
 driven by PCR/PTS/DTS, not the arrival time stamp).
 """
 
+import math
 import struct
 from dataclasses import dataclass, field
 
 from bdauthor.bdav import IG_PID, IG_STREAM_TYPE, SOURCE_PACKET, crc32_mpeg
-from bdauthor.menu.ig import PTS_CLOCK_HZ, decode_gap
+from bdauthor.menu.ig import PTS_CLOCK_HZ, Segment, decode_gap
 
 PAT_PID = 0x0000
 PMT_PID = 0x0100
@@ -31,6 +32,13 @@ _TS_SYNC = 0x47
 _TS_PACKET_SIZE = SOURCE_PACKET - 4
 _MAX_TS_PAYLOAD = _TS_PACKET_SIZE - 4  # minus the 4-byte TS header, no adaptation field
 _ALIGNED_UNIT_LEN = 32 * SOURCE_PACKET  # 6144 bytes: a BDAV clip's size must be a multiple of this
+
+# BD-ROM's own HDMV object decode rate (128 Mbps at 16 bits/pixel = 8,000,000 pixels/sec). Found by
+# fitting the reference disc's own IG clip: every OBJECT (ODS) segment's own (pts - dts), grouped by
+# object_id for the (unfragmented, in our case) objects that share one, is exactly
+# ceil(width * height * PTS_CLOCK_HZ / _OBJECT_DECODE_RATE) -- confirmed against all 696 objects in
+# that clip with zero mismatches. See docs/hdmv-ig-notes.md.
+_OBJECT_DECODE_RATE = 8_000_000
 
 
 @dataclass
@@ -141,7 +149,10 @@ def _pes_packet(segment: bytes, pts: int, dts: int | None) -> bytes:
     if has_dts:
         header_data += _pts_dts_bytes(dts, 0x1)
     flags = 0xC0 if has_dts else 0x80
-    body = bytes([0x80, flags, len(header_data)]) + header_data + segment  # 0x80: fixed "10" marker bits
+    # 0x84: fixed "10" marker bits + data_alignment_indicator=1 -- every PES on the reference
+    # disc's own IG clip sets this (each PES starts exactly at an HDMV segment boundary, which
+    # is what the bit means); see docs/hdmv-ig-notes.md.
+    body = bytes([0x84, flags, len(header_data)]) + header_data + segment
     packet_length = len(body)
     length_field = struct.pack(">H", packet_length) if packet_length <= 0xFFFF else b"\x00\x00"
     return bytes([0, 0, 1, _PES_STREAM_ID_PRIVATE_1]) + length_field + body
@@ -159,13 +170,34 @@ def _packetize(pid: int, pes: bytes, cc: _ContinuityCounters) -> list[bytes]:
     return packets
 
 
+_FIRST_FRAGMENT_FLAGS = frozenset({0xC0, 0x80})  # object_data_fragment: first-and-last, first-not-last
+
+
+def _object_pixel_count(data: bytes) -> int:
+    """`width * height` from an OBJECT segment's own header (see `ig.Image.pack`)."""
+    fragment_flag = data[6]
+    if fragment_flag not in _FIRST_FRAGMENT_FLAGS:
+        raise ValueError("a continuation object_data_fragment carries no width/height of its own")
+    width, height = struct.unpack(">HH", data[10:14])
+    return width * height
+
+
 def build_ig_clip(segments: list[bytes], seconds: float, pts: int = 0) -> bytes:
     """A complete .m2ts (BDAV source packets): PAT, PMT, periodic PCR, and `segments` as IG PES.
 
-    `pts` is the earliest allowed presentation instant, exactly like `ig.pgs_carrier`: every
-    segment gets the same `(pts, dts)` pair, `decode_gap` ticks apart (see there). The clip spans
-    `seconds` (matching the menu's own looping background clip) purely to carry PCR for that
-    long; the composition itself is still sent only once, as on a real disc.
+    `pts` is the earliest allowed presentation instant, exactly like `ig.pgs_carrier`. Segments are
+    given PTS/DTS by walking a single "decode clock" forward, matching the reference disc's own IG
+    clip field-for-field (confirmed to zero mismatches across all its segments; see
+    docs/hdmv-ig-notes.md):
+
+    - the composition (ICS) gets `(pts, dts)`, `decode_gap` ticks apart (see there), and starts the
+      clock at `dts`;
+    - each OBJECT (ODS) is decoded starting exactly when the clock stands: its own `dts` is the
+      current clock, and its `pts` is `dts` plus how long its own pixels take to decode at BD-ROM's
+      HDMV object decode rate (`_OBJECT_DECODE_RATE`, in pixels/second) -- which also becomes the
+      new clock;
+    - PALETTE and END segments cost no decode time: they carry only the current clock as their PTS
+      (no DTS at all), and do not move the clock.
     """
     gap = decode_gap(sum(len(data) for data in segments))
     dts = max(0, pts - gap)
@@ -176,8 +208,19 @@ def build_ig_clip(segments: list[bytes], seconds: float, pts: int = 0) -> bytes:
     out = bytearray()
     out += _source_packet(_psi_packet(PAT_PID, cc.next(PAT_PID), _pat_section()), 0)
     out += _source_packet(_psi_packet(PMT_PID, cc.next(PMT_PID), _pmt_section()), 0)
-    for segment in segments:
-        for packet in _packetize(IG_PID, _pes_packet(segment, pts, dts), cc):
+    clock = dts
+    for data in segments:
+        kind = data[0]
+        if kind == Segment.INTERACTIVE_COMPOSITION:
+            pes = _pes_packet(data, pts, dts)
+        elif kind == Segment.OBJECT:
+            segment_dts = clock
+            segment_pts = segment_dts + math.ceil(_object_pixel_count(data) * PTS_CLOCK_HZ / _OBJECT_DECODE_RATE)
+            clock = segment_pts
+            pes = _pes_packet(data, segment_pts, segment_dts)
+        else:
+            pes = _pes_packet(data, clock, None)
+        for packet in _packetize(IG_PID, pes, cc):
             out += _source_packet(packet, 0)
 
     pcr_pts = 0

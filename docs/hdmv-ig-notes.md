@@ -110,6 +110,50 @@ varying widely, from 1 up to 67 in a single page) confirms:
   (`NONE_ID`) is common on pages that are not meant to be entered with a specific default
   selection.
 
+### 2.1. The ICS header, field by field, confirmed exactly against a real 17-page menu
+
+Decoding the reference disc's own out-of-mux IG clip's ICS in full (concatenating its two
+`INTERACTIVE_COMPOSITION` fragments, then walking `video_descriptor`, `composition_descriptor`,
+`sequence_descriptor`, `interactive_composition_data_fragment`, all 17 pages and every button in
+them) against `menu.ig.InteractiveComposition`/`Page`/`Button`'s own `pack()` layout found no
+structural divergence -- every field lines up byte-for-byte with what our own encoder produces
+for the same field:
+
+- `video_descriptor`: `1920x1080`, `frame_rate_code = 1` (23.976p) -- matches the table our own
+  `FRAME_RATE_CODES` uses.
+- `composition_descriptor.composition_state = 2` (`EPOCH_START`) -- matches our own default.
+- `stream_model = 1` (out-of-mux), and, exactly as `InteractiveComposition.pack()` already does,
+  **no `composition_timeout_pts`/`selection_timeout_pts` fields at all** when `stream_model == 1`
+  -- confirming these two 5-byte fields are genuinely omitted for an out-of-mux composition, not
+  just zeroed.
+- `user_timeout_duration = 0`, matching our own default.
+- Effect sequences (`IN_effects`/`OUT_effects`) are length-prefixed and were skipped rather than
+  fully decoded (irrelevant to a static menu; our own encoder never emits any window/effect data
+  either, matching the "no effects" pages seen on most of the real disc's own pages).
+
+### 2.2. A real "resume playback" button reads its title number through the same scratch register we do
+
+The reference disc has a persistent button, present on multiple pages at the same screen
+position, whose command list (24-28 commands, mixed with unrelated state bookkeeping specific to
+that disc's own authoring, e.g. a legal-notice/logo-reel gate unrelated to any menu architecture
+question) ends with exactly this pattern before jumping to the movie:
+
+```
+MOVE   r4076, <title number>   (an immediate)
+JUMP_TITLE  r4076
+```
+
+`r4076` (`0xFEC`) is the *exact* scratch register our own `movie_object._TITLE_REG` uses for
+`JUMP_TITLE` in every button we generate (`menu/simple.py`'s Play button and each Scenes button
+via `_chapter_jump`). This was not something we had matched on purpose -- both landed on the same
+register independently, which is a strong (if informal) confirmation that a plain
+"load an immediate into a scratch GPR, then `JUMP_TITLE` that register" is the standard,
+unremarkable way real authoring tools do this, not something a stricter decoder would reject if
+done differently. No wait, timer, or polling-style instruction (`SET_NV_TIMER`, `STILL_ON`, or a
+`GOTO` loop) appears anywhere in this button's command list, or in any other button's command list
+inspected on that disc -- ruling out "the ICS button commands are structurally different from a
+real disc's" as an explanation for any button-press delay bug (see 4.6).
+
 ## 3. Menu delivery models: in-mux vs. out-of-mux (SubPath)
 
 Two different, both spec-legal, ways to deliver an IG menu were found in the wild on
@@ -342,6 +386,63 @@ output for our own clips) lists **two** programs in its PAT, not one: `program_n
 to `PID 0x1F` (the "network PID" entry) *and* the actual program mapped to the PMT's own PID. Our
 from-scratch PAT (`_pat_section`) only had the second one. Both fixes are in `menu/ig_clip.py`.
 
+### 4.6. The IG SubPath's own clip duration must not be tied to the background loop's length
+
+A real commercial disc's own IG SubPath (see section 3) is a **short clip**: on the disc
+inspected, its single, non-repeated `SubPlayItem` has `In_Time = 524280`, `Out_Time = 664064`
+(both 45 kHz), a duration of about **3.1 seconds** -- synced once to the very start of the main
+path (`sync_playitem_id = 0`, `sync_pts = 0`) and never repeated, regardless of the main path's
+own PlayItem repeating 501 times over 390 minutes underneath it. This matches section 5's own
+finding that the composition is transmitted only once and never expires
+(`composition_timeout_pts = 0`): once decoded, it sits on the graphics plane on its own, and the
+SubPath's own clip/`SubPlayItem` has no reason to last as long as the video does.
+
+Our own code (`menu/__init__.py`, before this was found) built the IG clip with
+`build_ig_clip(segments, seconds)` and the SubPath's `Out_Time` from that same `seconds` value --
+which was the background loop's own duration (`MENU_SECONDS`, 10s by default; `--menu-seconds`
+in tests can make this longer still). That made our IG SubPath's own physical duration, and its
+`SubPlayItem`'s `Out_Time`, scale with an unrelated setting (how long *one repeat* of the
+background video lasts) instead of being a short, fixed duration decoupled from it, like the
+reference disc's own ~3.1s. Fixed: `_IG_CLIP_SECONDS` (a fixed, short constant, independent of
+`menu_seconds`) now drives both the IG clip's own `build_ig_clip(..., seconds=_IG_CLIP_SECONDS)`
+call and the SubPath's `Out_Time`; `_add_ig_subpath` also now refuses to build a menu whose own
+`decode_gap` would not fit inside that duration, rather than silently truncating it.
+
+This was found while investigating a user-reported bug: in Kodi, a button's action (Play,
+Scenes) only took effect once the background loop's own ~10-second window ended, regardless of
+when during that window the button was pressed; VLC showed a similar but cache-dependent delay.
+The ICS's own button commands were ruled out as the cause (2.2), and the IG SubPath was confirmed
+*not* to be cloned per background-loop repeat (3) -- structurally, both already matched the
+reference disc. The 10-second stall window matching `MENU_SECONDS` exactly is a strong
+coincidence pointing at this bug, but it was not proven as the actual root cause (no hardware
+player or Kodi available from here to confirm) -- see `docs/known-issues.md` for the open item
+and re-test after this fix.
+
+### 4.7. A clip's real content never starts at PTS/DTS 0 -- a fixed authoring lead-in, confirmed across unrelated clips
+
+The reference disc's own authoring tool never starts a clip's actual PES content (its own
+`PTS`/`DTS` domain) at 0. Checked across three otherwise unrelated clips on the disc inspected --
+the menu's background video, the menu's own IG clip, and a completely separate still-image
+title's clip -- all three start their real content at the exact same instant: `524280` in the
+CLPI/MPLS 45 kHz clock (`1048560` in the PES's own 90 kHz clock). This is not something derived
+from any of those clips' own content (they have nothing in common otherwise): it is a fixed
+lead-in constant of that authoring tool, applied uniformly.
+
+Our own `build_ig_clip` defaulted its `pts` parameter to `0`, and `_add_ig_subpath` built its
+`SubPlayItem`'s `In_Time` as `0` and its CLIPINF's `Presentation Start` as `0` to match --
+diverging from this convention on all three counts. Fixed: `menu.__init__._IG_LEAD_IN_PTS`
+(`1_048_560`, the same 90 kHz value) is now the `pts` passed to `build_ig_clip`, and both the
+`SubPlayItem`'s `In_Time`/`Out_Time` and the CLIPINF's `Presentation Start`/`Presentation End`
+(`clip_info_writer.build_clip_info`'s now-required `presentation_start` parameter, previously
+hardcoded to `0`) are derived from it, so all three stay self-consistent the same way the
+reference disc's own do.
+
+Not chased: that same disc's IG clip PCR values sit around `536_874_618` -- roughly 500x larger
+than this PTS/DTS lead-in, on what is evidently a separate, much larger absolute clock (already
+flagged in 4.3 as a refuted rabbit hole: PCR discontinuities across repeats are normal and
+harmless). There is no structural reason to make our own PCR track this lead-in, so it still
+starts at 0; only the PTS/DTS domain (and the navigation fields that describe it) was aligned.
+
 ## 5. Timing: two different clocks, and a real decode-time buffer
 
 - **PES `PTS`/`DTS` are in a 90 kHz clock**, standard MPEG convention.
@@ -362,6 +463,66 @@ from-scratch PAT (`_pat_section`) only had the second one. Both fixes are in `me
   composition on screen indefinitely from a single transmission. (This is worth noting
   because periodic retransmission was, at one point, suspected as necessary for decoder
   compatibility; real commercial authoring does not do that.)
+
+### 5.1. `data_alignment_indicator` is always set on a real disc's own IG PES
+
+Every one of the 725 PES packets making up a real IG clip's stream (`private_stream_1`,
+`stream_id = 0xBD`) has `data_alignment_indicator = 1` in the PES flags byte (`0x84`, not the
+more commonly seen `0x80`). This makes sense given the byte immediately after the PES header
+is always the start of one HDMV segment: the bit is doing exactly what it says. A from-scratch
+PES writer that hardcodes the flags byte to `0x80` (as ours originally did) is a real, if minor,
+divergence -- unlikely to matter to a real decoder (nothing in libbluray's own PES parsing
+checks this bit), but there is no reason not to match it.
+
+### 5.2. Which segment types carry a `DTS` at all: PALETTE and END never do, ICS and OBJECT always do
+
+Across all 725 segments of the same real IG clip, `PES_packet` header flags split cleanly by
+segment type, with zero exceptions:
+
+| Segment type | Count | `DTS` present? |
+|---|---|---|
+| `INTERACTIVE_COMPOSITION` (0x18) | 2 (fragmented) | yes |
+| `OBJECT` (0x15) | 705 | yes |
+| `PALETTE` (0x14) | 17 | **no** (PTS-only) |
+| `END` (0x80) | 1 | **no** (PTS-only) |
+
+For every PALETTE and the END segment, the PTS field carries the *current decode clock*
+(see 5.3) rather than any presentation-related instant of its own -- consistent with these two
+segment types costing no decode time in the model below.
+
+### 5.3. The fine-grained per-segment decode clock: a single 8,000,000 pixels/second rate for OBJECT segments
+
+Decoding every OBJECT segment's `(pts, dts)` pair, then grouping fragments of the same
+`object_id` sharing one timestamp pair (a large button image is fragmented into several `OBJECT`
+segments that are all decoded together, so they share one timing pair), gives, for **all 696
+distinct objects in the clip, with zero exceptions**:
+
+```
+pts - dts == ceil(width * height * 90_000 / 8_000_000)
+```
+
+where `width`/`height` are the object's own dimensions (from its header) and `90_000` is the PES
+clock. `8_000_000` is BD-ROM's own HDMV **object decode rate**: 128 Mbps at 16 bits/pixel. This
+was confirmed purely empirically (by fitting the real disc's own numbers), not assumed from the
+spec text, but it lines up with the commonly cited BD-ROM graphics decode rate.
+
+Segments are decoded back-to-back along a single running clock, not independently against the
+composition's own presentation time:
+
+- the clock starts at the composition's own `dts` (see 5 above, unchanged: still
+  `decode_gap(total_bytes)` ticks before the composition's `pts`);
+- each OBJECT's own `dts` is wherever the clock currently stands, its `pts` is `dts` plus the
+  formula above, and the clock then advances to that `pts`;
+- PALETTE and END segments read the clock without moving it (5.2).
+
+This is exactly the model `menu.ig_clip.build_ig_clip` now implements
+(`_OBJECT_DECODE_RATE`, `_object_pixel_count`). Not derived: the very first gap (the
+composition's own `decode_gap`, based on total *byte* size rather than pixels) is a separate,
+coarser approximation -- it was not re-derived here, only confirmed consistent with the
+~580-600 KB/s figure already used for it (see `menu.ig.decode_gap`'s own docstring). A real
+muxer may compute that first gap by an equally precise, undiscovered rule; ~600 KB/s already
+matched closely enough (within a few percent) that inventing a new formula for it was not
+attempted.
 
 ## 6. A clip's file size must be a whole number of 6144-byte "aligned units"
 

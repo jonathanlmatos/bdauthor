@@ -128,15 +128,4 @@ tests/            # pytest; builders.py = model factories, conftest.py builds sy
   block, which shows up as `bd_menu_test` finding the SubPath and selecting its IG stream but never
   drawing anything (`_preload_m2ts(): error loading ... at N` with `-v` and `BD_DEBUG_MASK` set) --
   found and fixed while wiring this up; `build_ig_clip` now pads with null-PID (`0x1FFF`) packets.
-- The menu's looping background is `navigation.playlist.loop_play_item`: it repeats the
-  background PlayItem (seamlessly connected, an exact byte copy including its IG SubPath STN
-  entry) **500 times flat** (`menu._MENU_LOOP_REPEATS`), matching a real commercial disc's own
-  repeat count, instead of the MovieObject re-selecting a short playlist in a loop -- which
-  reopens it and resets the IG menu back to its first page every time (confirmed against
-  libbluray's own player source; see `docs/hdmv-ig-notes.md`). The repeat *count* is what was
-  matched, not the disc's total duration (390 minutes): opening a playlist re-reads and
-  re-parses its clip's CLIPINF once per PlayItem regardless of duplicates (`_fill_clip` in
-  libbluray's `navigation.c`), so chasing the same total duration with our own much shorter
-  clip would need many more repeats -- and measurably slower menu navigation on a real player,
-  invisible in our own filesystem-cached test suite.
 - Verified with libbluray only (VLC and hardware pending): the ICS reserved bits are written as 0.

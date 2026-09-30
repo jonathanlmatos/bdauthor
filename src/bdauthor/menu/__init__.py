@@ -6,7 +6,7 @@ from pathlib import Path
 
 from bdauthor.bdav import IG_PID, IG_STREAM_TYPE, SOURCE_PACKET
 from bdauthor.menu.background import MENU_SECONDS, MenuError, check_video_supported, mux_menu_clip
-from bdauthor.menu.ig import PTS_CLOCK_HZ
+from bdauthor.menu.ig import PTS_CLOCK_HZ, decode_gap
 from bdauthor.menu.ig_clip import PCR_PID, PMT_PID, build_ig_clip
 from bdauthor.menu.programs import menu_navigation
 from bdauthor.menu.simple import MenuGraphicsError, frame_rate_code, simple_menu
@@ -23,6 +23,27 @@ MENU_CLIP = "00001"
 _MENU_IG_CLIP = "00002"
 _MOVIE_CLIP = "00000"
 _MENU_LOOP_REPEATS = 500  # matches a real commercial disc's own repeat count (501, its first PlayItem inclusive)
+
+# How long the IG SubPath's own clip/SubPlayItem lasts: NOT tied to the background loop's own
+# duration (`MENU_SECONDS`/`menu_seconds`). A real commercial disc's own menu SubPath is a short
+# clip (~3.1s observed) synced to the very start of the main path and never repeated, regardless
+# of how long the background video loops for underneath it -- once the composition is decoded,
+# it stays on the graphics plane on its own (composition_timeout_pts=0, "never expires"; see
+# docs/hdmv-ig-notes.md). Tying this to the background loop's own duration instead (as done
+# before) made the IG clip, and its SubPlayItem's Out_Time, last as long as one loop repeat
+# (10s by default) for no structural reason.
+_IG_CLIP_SECONDS = 3
+
+# The reference disc's own authoring tool never starts a clip's real content at PTS/DTS 0: its
+# menu's IG clip, its menu's own background video, and even an unrelated still-image title's clip
+# all start at this exact same PTS (90 kHz)/45 kHz-clock lead-in instead (524280 in the CLPI/MPLS
+# 45 kHz clock; this is its 90 kHz PES-clock equivalent). It is a fixed convention of that
+# toolchain, confirmed identical across multiple, otherwise unrelated clips on that disc -- not
+# something tied to this menu's own content, but reproduced anyway for full field-for-field
+# parity. See docs/hdmv-ig-notes.md. (Note: PCR is not affected -- that clip's own PCR values sit
+# on a much larger, disc-wide absolute clock already established as unrelated busywork to chase;
+# see the refuted PCR-discontinuity investigation in docs/hdmv-ig-notes.md.)
+_IG_LEAD_IN_PTS = 1_048_560
 
 
 def _copy_menu_clip(menu_bdmv: Path, bdmv_dir: Path) -> None:
@@ -53,26 +74,35 @@ def _copy_menu_clip(menu_bdmv: Path, bdmv_dir: Path) -> None:
         shutil.copyfile(targets[folder], bdmv_dir / "BACKUP" / folder / targets[folder].name)
 
 
-def _add_ig_subpath(bdmv_dir: Path, segments: list[bytes], seconds: int) -> None:
+def _add_ig_subpath(bdmv_dir: Path, segments: list[bytes]) -> None:
     """Write the menu's buttons as a standalone, out-of-mux IG clip and reference it as a SubPath
     of the menu's PlayItem (MENU_CLIP's playlist, already written by `_copy_menu_clip`).
+
+    Its own duration is `_IG_CLIP_SECONDS`, independent of the background loop's length: see there.
+    Its content starts at `_IG_LEAD_IN_PTS`, not at PTS/DTS 0: see there.
     """
     stream_target = bdmv_dir / "STREAM" / f"{_MENU_IG_CLIP}.m2ts"
     clip_info_target = bdmv_dir / "CLIPINF" / f"{_MENU_IG_CLIP}.clpi"
     if stream_target.exists() or clip_info_target.exists():
         raise MenuError(f"{stream_target} already exists")
 
-    clip = build_ig_clip(segments, seconds)
+    gap = decode_gap(sum(len(data) for data in segments))
+    if gap >= _IG_CLIP_SECONDS * PTS_CLOCK_HZ:
+        raise MenuError("the menu's graphics are too large to decode within the IG clip's own duration")
+
+    clip = build_ig_clip(segments, _IG_CLIP_SECONDS, pts=_IG_LEAD_IN_PTS)
     stream_target.write_bytes(clip)
 
-    duration_pts = round(seconds * PTS_CLOCK_HZ)  # 90 kHz, matching the clip's own PES PTS/DTS
-    presentation_end = duration_pts // 2  # the CLPI's own 45 kHz clock, see docs/hdmv-ig-notes.md
+    duration_pts = round(_IG_CLIP_SECONDS * PTS_CLOCK_HZ)  # 90 kHz, matching the clip's own PES PTS/DTS
+    presentation_start = _IG_LEAD_IN_PTS // 2  # the CLPI/MPLS 45 kHz clock, see docs/hdmv-ig-notes.md
+    presentation_end = presentation_start + duration_pts // 2
     clip_info = build_clip_info(
         pmt_pid=PMT_PID,
         pcr_pid=PCR_PID,
         stream_pid=IG_PID,
         stream_coding_type=IG_STREAM_TYPE,
         num_source_packets=len(clip) // SOURCE_PACKET,
+        presentation_start=presentation_start,
         presentation_end=presentation_end,
     )
     clip_info_target.write_bytes(clip_info)
@@ -83,7 +113,7 @@ def _add_ig_subpath(bdmv_dir: Path, segments: list[bytes], seconds: int) -> None
         playlist = add_subpath(
             playlist_target.read_bytes(),
             clip_id=_MENU_IG_CLIP,
-            in_time=0,
+            in_time=presentation_start,
             out_time=presentation_end,
             pid=IG_PID,
         )
@@ -155,7 +185,7 @@ def add_menu(
     with tempfile.TemporaryDirectory(prefix="bdauthor-menu-") as tmp:
         menu_bdmv = mux_menu_clip(muxer, video, Path(tmp), title=graphics.title, seconds=seconds)
         _copy_menu_clip(menu_bdmv, bdmv_dir)
-    _add_ig_subpath(bdmv_dir, graphics.segments(), seconds)
+    _add_ig_subpath(bdmv_dir, graphics.segments())
     _loop_menu_background(bdmv_dir)
     index, objects = menu_navigation(movie_playlist=int(_MOVIE_CLIP), menu_playlist=int(MENU_CLIP))
     write_navigation(bdmv_dir, index, objects)

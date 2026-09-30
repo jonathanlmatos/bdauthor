@@ -271,6 +271,29 @@ def play_disc(libbluray_tool, disc, *keys):
     return result.stdout.splitlines()
 
 
+def test_ig_subpath_duration_does_not_grow_with_the_background_loop(tsmuxer_disc, tmp_path, tsmuxer, libbluray_tool):
+    """A real commercial disc's own IG SubPath is a short clip (~3.1s observed), synced once to the
+    start of the main path -- not tied to how long the looping background clip is. `menu_seconds`
+    only affects the background clip/PlayItem here; a longer loop must not stretch the IG SubPath
+    too (see `_IG_CLIP_SECONDS`)."""
+    disc = tmp_path / "disc"
+    shutil.copytree(tsmuxer_disc, disc)
+    movie = probe(next((tsmuxer_disc / "BDMV" / "STREAM").glob("00000.m2ts"))).video[0]
+    add_menu(disc / "BDMV", movie, TsMuxer(tsmuxer), menu_seconds=20)
+
+    output = subprocess.run(
+        [str(libbluray_tool("mpls_dump")), "-vip", str(disc / "BDMV" / "PLAYLIST" / f"{MENU_CLIP}.mpls")],
+        capture_output=True,
+        text=True,
+    ).stdout
+    sub_path = output.split("Sub Path 0:")[1]
+    in_time = int(re.search(r"In-Time:\s*(\d+)", sub_path).group(1))
+    out_time = int(re.search(r"Out-Time:\s*(\d+)", sub_path).group(1))
+    duration_seconds = (out_time - in_time) / 45_000  # the CLPI/MPLS clock is 45 kHz
+    assert duration_seconds < 5  # nowhere near the 20s background loop
+    assert "Sync playitem Id: 0" in sub_path  # synced to the very start of the main path, not repeated
+
+
 def test_libbluray_lists_an_interactive_graphics_stream_in_the_menu_clip(disc_with_menu, libbluray_tool):
     """The IG stream is a separate, out-of-mux SubPath clip, matching a real commercial disc."""
     bdmv = disc_with_menu / "BDMV"
