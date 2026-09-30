@@ -610,7 +610,7 @@ fake provider string would be actively wrong, and leaving it blank is a legitima
 authoring tools make (nothing requires this field to be populated). Documented here as checked,
 not silently skipped.
 
-### 8.3. `AppInfoPlayList()`'s own UO_mask_table: non-zero and content-dependent on every playlist inspected -- not reproduced
+### 8.3. `AppInfoPlayList()`'s own UO_mask_table: non-zero and content-dependent on every playlist inspected -- fixed
 
 Distinct from the ICS-level `UO_mask_table` (already covered in section 1) and the PlayItem-level
 one (8.5), `AppInfoPlayList()` -- the block right after the MPLS header, before `PlayList()`
@@ -629,15 +629,34 @@ per playlist in a pattern consistent with reflecting *that playlist's own availa
 masked when a given title doesn't carry those streams) rather than anything about being a menu
 specifically.
 
-Our own playlists (menu and movie alike) inherit an all-zero `UO_mask_table` from tsMuxeR's own
-MPLS template; nothing in this codebase writes to this block at all (`navigation/playlist.py`
-only ever patches clip ids, the STN table, and PlayItem repetition/marks -- confirmed by grep).
-Not fixed: without the BD-ROM spec text or libbluray's own `mpls_parse.c` source in hand to
-confirm each of the 64 bits' exact meaning, and given the values are clearly feature-dependent
-rather than a fixed constant, hand-deriving and hardcoding a plausible-looking bit pattern here
-would be guessing, not reverse-engineering, and risks masking a UO our own disc's menu actually
-needs. Flagged here as a confirmed, real, currently-unaddressed divergence rather than something
-quietly judged harmless.
+Our own playlists (menu and movie alike) inherited an all-zero `UO_mask_table` from tsMuxeR's own
+MPLS template; nothing in this codebase wrote to this block at all. This section originally
+stopped here, flagged as a confirmed divergence left unaddressed for lack of the bit-to-operation
+mapping -- but the reference disc's own author had a copy of libbluray's source handy
+(`src/libbluray/bdnav/uo_mask_table.h`, `uo_mask.c`), which gives that mapping precisely (bit
+order top to bottom: `menu_call, title_search, chapter_search, time_search,
+skip_to_next_point, skip_to_prev_point, play_firstplay, stop, pause_on, pause_off, still_off,
+forward, backward, resume, move_up, move_down, move_left, move_right, select, activate,
+select_and_activate, primary_audio_change, <reserved>, angle_change, popup_on, popup_off,
+pg_enable_disable, pg_change, secondary_video_enable_disable, secondary_video_change,
+secondary_audio_enable_disable, secondary_audio_change, <reserved>, pip_pg_change`, then 30
+reserved bits). Decoding the main menu's `3cb805ff40000000` with it confirms the pattern
+guessed at above exactly: masked are chapter/time search, both skip points, pause-on, still-off,
+forward, backward, primary audio change, angle change, popup on/off, PG enable/change, both
+secondary video/audio enable+change, and PIP PG change -- everything with no meaning for a
+chapterless, single-angle, out-of-mux button menu with no subtitles or secondary audio/video.
+Unmasked: `menu_call`, `title_search`, `stop`, `pause_off`, `resume`, and all of button
+navigation (`move_*`/`select`/`activate`/`select_and_activate`) -- exactly what a menu needs to
+keep working.
+
+Fixed: `navigation/playlist.py` gained `_UO_MASK_BITS` (the same bit order above),
+`uo_mask(masked=...)` (builds the 8-byte field from operation names) and
+`mask_user_operations(data, mask)` (patches it into a playlist). `menu.__init__._MENU_UO_MASK`
+now reproduces the exact same masked set as the reference disc's own menu (not tied to *its*
+literal bytes, but to the general, structural principle: any out-of-mux HDMV button menu with no
+chapters/PG/secondary streams and one angle has the same feature set, so the same mask applies),
+applied by `_mask_menu_user_operations`. Verified: our own menu playlist's `UO_mask_table` is now
+byte-for-byte `3cb805ff40000000`, identical to the reference disc's own.
 
 ### 8.4. The IG clip's own CLIPINF has no EP_map/CPI either -- confirmed matching
 

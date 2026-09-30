@@ -9,10 +9,13 @@ from bdauthor.navigation.playlist import (
     _PLAY_ITEM_TO_STN,
     _STN_COUNTS,
     _STN_ENTRIES,
+    _UO_MASK_OFFSET,
     PlaylistError,
     add_subpath,
     clip_ids,
     loop_play_item,
+    mask_user_operations,
+    uo_mask,
 )
 
 
@@ -266,3 +269,58 @@ def test_libbluray_accepts_the_looped_playlist_marks(tsmuxer_disc, libbluray_too
     assert out.returncode == 0, out.stderr
     assert out.stdout.count("PlayMark Count 5") or "PlayMark Count 5\n" in out.stdout
     assert out.stdout.count("Type: Entry") == 5
+
+
+# --- AppInfoPlayList()'s own UO_mask_table (see docs/hdmv-ig-notes.md) -----------------------------
+
+
+def test_uo_mask_matches_the_reference_disc_menu_playlist_byte_for_byte():
+    # confirmed against libbluray's own src/libbluray/bdnav/uo_mask_table.h / uo_mask.c bit order
+    mask = uo_mask(
+        masked=frozenset(
+            {
+                "chapter_search",
+                "time_search",
+                "skip_to_next_point",
+                "skip_to_prev_point",
+                "pause_on",
+                "still_off",
+                "forward",
+                "backward",
+                "primary_audio_change",
+                "angle_change",
+                "popup_on",
+                "popup_off",
+                "pg_enable_disable",
+                "pg_change",
+                "secondary_video_enable_disable",
+                "secondary_video_change",
+                "secondary_audio_enable_disable",
+                "secondary_audio_change",
+                "pip_pg_change",
+            }
+        )
+    )
+    assert mask == bytes.fromhex("3cb805ff40000000")  # the reference disc's own menu, byte-for-byte
+
+
+def test_uo_mask_refuses_an_unknown_operation_name():
+    with pytest.raises(PlaylistError, match="unknown"):
+        uo_mask(masked=frozenset({"not_a_real_operation"}))
+
+
+def test_mask_user_operations_patches_only_the_uo_mask_bytes(video_only_playlist):
+    mask = uo_mask(masked=frozenset({"stop"}))
+    patched = mask_user_operations(video_only_playlist, mask)
+    assert patched[_UO_MASK_OFFSET : _UO_MASK_OFFSET + 8] == mask
+    assert patched[:_UO_MASK_OFFSET] == video_only_playlist[:_UO_MASK_OFFSET]
+    assert patched[_UO_MASK_OFFSET + 8 :] == video_only_playlist[_UO_MASK_OFFSET + 8 :]
+
+
+def test_libbluray_accepts_the_masked_playlist(tsmuxer_disc, libbluray_tool, tmp_path):
+    data = (tsmuxer_disc / "BDMV" / "PLAYLIST" / "00000.mpls").read_bytes()
+    patched = mask_user_operations(data, uo_mask(masked=frozenset({"stop", "move_up"})))
+    path = tmp_path / "00000.mpls"
+    path.write_bytes(patched)
+    out = subprocess.run([str(libbluray_tool("mpls_dump")), "-c", str(path)], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr

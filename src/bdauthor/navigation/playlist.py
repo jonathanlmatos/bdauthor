@@ -75,6 +75,20 @@ _CONNECTION_SEAMLESS = 5
 _MARK_RECORD_LEN = 14  # reserved(1) mark_type(1) play_item_ref(2) time(4) entry_es_pid(2) duration(4)
 _MARK_PLAY_ITEM_REF_AT = 2  # offset of play_item_ref within one 14-byte mark record
 
+# AppInfoPlayList().UO_mask_table: 40-byte fixed header, then length(4) reserved(1) playback_type(1)
+# playback_count/reserved(2), then this 8-byte, 64-bit field. Bit order and names are libbluray's
+# own (src/libbluray/bdnav/uo_mask_table.h, uo_mask.c) -- `None` marks a reserved bit.
+_UO_MASK_OFFSET = 48
+_UO_MASK_BITS = (
+    "menu_call", "title_search", "chapter_search", "time_search", "skip_to_next_point",
+    "skip_to_prev_point", "play_firstplay", "stop", "pause_on", "pause_off", "still_off",
+    "forward", "backward", "resume", "move_up", "move_down", "move_left", "move_right",
+    "select", "activate", "select_and_activate", "primary_audio_change", None, "angle_change",
+    "popup_on", "popup_off", "pg_enable_disable", "pg_change", "secondary_video_enable_disable",
+    "secondary_video_change", "secondary_audio_enable_disable", "secondary_audio_change", None,
+    "pip_pg_change",
+)
+
 
 def loop_play_item(data: bytes, *, repeats: int) -> bytes:
     """Repeat the playlist's sole PlayItem `repeats` times in total, connected seamlessly.
@@ -204,4 +218,31 @@ def add_subpath(data: bytes, *, clip_id: str, in_time: int, out_time: int, pid: 
     struct.pack_into(">H", patched, list_pos + 8, subpaths + 1)
     for offset in (_MARK_POS_OFFSET, _EXT_POS_OFFSET):
         struct.pack_into(">I", patched, offset, struct.unpack_from(">I", patched, offset)[0] + total_inserted)
+    return bytes(patched)
+
+
+def uo_mask(*, masked: frozenset[str]) -> bytes:
+    """The 8-byte `AppInfoPlayList().UO_mask_table`, with `masked`'s named operations blocked.
+
+    Names and bit order are libbluray's own (`_UO_MASK_BITS`); a name not in `masked` leaves that
+    user operation allowed, matching a real disc's own convention of masking exactly (and only)
+    the operations that make no sense for a given playlist's own content -- see
+    docs/hdmv-ig-notes.md.
+    """
+    known = {name for name in _UO_MASK_BITS if name is not None}
+    if unknown := masked - known:
+        raise PlaylistError(f"unknown UO_mask_table operation(s): {sorted(unknown)}")
+    bits = "".join("1" if name in masked else "0" for name in _UO_MASK_BITS)
+    bits += "0" * (64 - len(bits))  # trailing reserved bits
+    return int(bits, 2).to_bytes(8, "big")
+
+
+def mask_user_operations(data: bytes, mask: bytes) -> bytes:
+    """Patch the playlist's own `AppInfoPlayList().UO_mask_table` (8 bytes; see `uo_mask`)."""
+    if len(mask) != 8:
+        raise PlaylistError("a UO_mask_table is 8 bytes")
+    if data[:4] != _SIGNATURE or len(data) < _UO_MASK_OFFSET + 8:
+        raise PlaylistError("not a playlist file")
+    patched = bytearray(data)
+    patched[_UO_MASK_OFFSET : _UO_MASK_OFFSET + 8] = mask
     return bytes(patched)

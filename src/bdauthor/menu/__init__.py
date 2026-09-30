@@ -15,7 +15,14 @@ from bdauthor.mux.base import Muxer
 from bdauthor.navigation import write_navigation
 from bdauthor.navigation.clip_info import ClipInfoError, add_self_referencing_atc_delta
 from bdauthor.navigation.clip_info_writer import build_clip_info
-from bdauthor.navigation.playlist import PlaylistError, add_subpath, loop_play_item, retarget_playlist
+from bdauthor.navigation.playlist import (
+    PlaylistError,
+    add_subpath,
+    loop_play_item,
+    mask_user_operations,
+    retarget_playlist,
+    uo_mask,
+)
 
 __all__ = ["MenuError", "add_menu", "check_menu_supported"]
 
@@ -45,6 +52,40 @@ _IG_CLIP_SECONDS = 3
 # see the refuted PCR-discontinuity investigation in docs/hdmv-ig-notes.md.)
 _IG_LEAD_IN_PTS = 1_048_560
 
+# Confirmed against the reference disc's own menu playlist's AppInfoPlayList().UO_mask_table
+# (decoded with libbluray's own bit layout, src/libbluray/bdnav/uo_mask_table.h/uo_mask.c -- see
+# docs/hdmv-ig-notes.md): every operation with no meaning for a chapterless, single-angle,
+# button-only menu clip with no subtitles or secondary audio/video is masked, while button
+# navigation (move_*/select/activate/select_and_activate) and stop/pause_off/resume/menu_call/
+# title_search stay unmasked. This is a fixed, structural property of a menu like ours, not a
+# guess: any disc's own out-of-mux HDMV button menu (no chapters, one angle, no PG/secondary
+# streams) has the same feature set, so the same mask applies.
+_MENU_UO_MASK = uo_mask(
+    masked=frozenset(
+        {
+            "chapter_search",
+            "time_search",
+            "skip_to_next_point",
+            "skip_to_prev_point",
+            "pause_on",
+            "still_off",
+            "forward",
+            "backward",
+            "primary_audio_change",
+            "angle_change",
+            "popup_on",
+            "popup_off",
+            "pg_enable_disable",
+            "pg_change",
+            "secondary_video_enable_disable",
+            "secondary_video_change",
+            "secondary_audio_enable_disable",
+            "secondary_audio_change",
+            "pip_pg_change",
+        }
+    )
+)
+
 
 def _copy_menu_clip(menu_bdmv: Path, bdmv_dir: Path) -> None:
     """Copy the muxed menu background clip into the disc as clip MENU_CLIP (stream, clip info, playlist).
@@ -72,6 +113,17 @@ def _copy_menu_clip(menu_bdmv: Path, bdmv_dir: Path) -> None:
 
     for folder in ("CLIPINF", "PLAYLIST"):  # BACKUP/ mirrors both
         shutil.copyfile(targets[folder], bdmv_dir / "BACKUP" / folder / targets[folder].name)
+
+
+def _mask_menu_user_operations(bdmv_dir: Path) -> None:
+    """Patch the menu playlist's own `AppInfoPlayList().UO_mask_table` to `_MENU_UO_MASK`."""
+    playlist_target = bdmv_dir / "PLAYLIST" / f"{MENU_CLIP}.mpls"
+    try:
+        playlist = mask_user_operations(playlist_target.read_bytes(), _MENU_UO_MASK)
+    except PlaylistError as exc:
+        raise MenuError(f"could not set the menu's UO mask: {exc}") from exc
+    playlist_target.write_bytes(playlist)
+    shutil.copyfile(playlist_target, bdmv_dir / "BACKUP" / "PLAYLIST" / playlist_target.name)
 
 
 def _add_ig_subpath(bdmv_dir: Path, segments: list[bytes]) -> None:
@@ -185,6 +237,7 @@ def add_menu(
     with tempfile.TemporaryDirectory(prefix="bdauthor-menu-") as tmp:
         menu_bdmv = mux_menu_clip(muxer, video, Path(tmp), title=graphics.title, seconds=seconds)
         _copy_menu_clip(menu_bdmv, bdmv_dir)
+    _mask_menu_user_operations(bdmv_dir)
     _add_ig_subpath(bdmv_dir, graphics.segments())
     _loop_menu_background(bdmv_dir)
     index, objects = menu_navigation(movie_playlist=int(_MOVIE_CLIP), menu_playlist=int(MENU_CLIP))
