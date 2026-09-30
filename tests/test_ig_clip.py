@@ -24,12 +24,46 @@ def test_pat_and_pmt_are_present_with_valid_crc(tmp_path):
     assert crc_is_valid(sections[0])
 
 
+def test_pat_lists_the_network_pid_like_every_real_clip_inspected_does(tmp_path):
+    # a real disc's own clip (and tsMuxeR's own output) always has two program entries: the
+    # network PID (program_number 0, PID 0x1f) and the actual program/PMT one -- see
+    # docs/hdmv-ig-notes.md
+    p = tmp_path / "clip.m2ts"
+    p.write_bytes(build_ig_clip([end_segment()], seconds=1))
+    (section,) = pmt_sections(p, PAT_PID)
+    assert crc_is_valid(section)
+
+    def entry(i):
+        pos = 8 + 4 * i
+        program_number = (section[pos] << 8) | section[pos + 1]
+        pid = ((section[pos + 2] & 0x1F) << 8) | section[pos + 3]
+        return program_number, pid
+
+    assert entry(0) == (0, 0x1F)
+    assert entry(1) == (1, PMT_PID)
+
+
 def test_pmt_lists_the_ig_stream_and_pcr_pid(tmp_path):
     p = tmp_path / "clip.m2ts"
     p.write_bytes(build_ig_clip([end_segment()], seconds=1))
     (section,) = pmt_sections(p, PMT_PID)
     assert bytes([0xE0 | PCR_PID >> 8, PCR_PID & 0xFF]) in section
     assert bytes([IG_STREAM_TYPE, 0xE0 | IG_PID >> 8, IG_PID & 0xFF]) in section
+
+
+def test_pmt_has_the_hdmv_registration_descriptor_at_program_level(tmp_path):
+    # a real commercial disc's own PMT (and tsMuxeR's own output) always carries this at the
+    # program level; a from-scratch PMT with no descriptors at all is a real, if minor,
+    # divergence from what any BD-ROM stream actually looks like -- see docs/hdmv-ig-notes.md
+    p = tmp_path / "clip.m2ts"
+    p.write_bytes(build_ig_clip([end_segment()], seconds=1))
+    (section,) = pmt_sections(p, PMT_PID)
+    program_info_length = ((section[10] & 0x0F) << 8) | section[11]
+    descriptors = section[12 : 12 + program_info_length]
+    assert bytes([0x05, 0x04]) + b"HDMV" in descriptors  # registration_descriptor, format "HDMV"
+    assert descriptors[6] == 0x88  # the vendor-private descriptor every real clip inspected also has
+    stream_type, pid_hi = section[12 + program_info_length : 12 + program_info_length + 2]
+    assert stream_type == IG_STREAM_TYPE  # descriptors didn't shift the stream loop
 
 
 def test_segments_come_out_exactly_as_they_went_in(tmp_path):
@@ -43,8 +77,8 @@ def test_pcr_repeats_for_the_whole_duration(tmp_path):
     p = tmp_path / "clip.m2ts"
     p.write_bytes(build_ig_clip([end_segment()], seconds=2))
     counts = pid_counts(p)
-    # 2s at a 40ms cadence (90kHz clock): 51 points from 0 up to and including 2s
-    assert counts[PCR_PID] == 51
+    # 2s at a 90ms cadence (90kHz clock, 8100 ticks): 23 points from 0 up to and including 2s
+    assert counts[PCR_PID] == 23
 
 
 def test_pcr_packets_carry_no_payload_and_a_valid_pcr_flag(tmp_path):

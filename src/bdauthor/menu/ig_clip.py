@@ -26,7 +26,7 @@ PMT_PID = 0x0100
 PCR_PID = 0x1001
 _NULL_PID = 0x1FFF
 _PES_STREAM_ID_PRIVATE_1 = 0xBD
-_PCR_INTERVAL_PTS = 3_600  # 40 ms at the 90 kHz PTS clock: a conservative, commonly used PCR cadence
+_PCR_INTERVAL_PTS = 8_100  # 90 ms at the 90 kHz PTS clock: matches the reference disc's own IG clip cadence
 _TS_SYNC = 0x47
 _TS_PACKET_SIZE = SOURCE_PACKET - 4
 _MAX_TS_PAYLOAD = _TS_PACKET_SIZE - 4  # minus the 4-byte TS header, no adaptation field
@@ -75,16 +75,37 @@ def _section(table_id: int, payload: bytes) -> bytes:
     return section + crc32_mpeg(section).to_bytes(4, "big")
 
 
+_NETWORK_PID = 0x001F  # every real clip inspected (the reference disc's and tsMuxeR's own) lists this
+
+
 def _pat_section(program_number: int = 1) -> bytes:
-    payload = struct.pack(">HBB", 1, 0xC1, 0x00)  # transport_stream_id, version=0/current, section 0/0
+    # transport_stream_id, version=0/current, section_number=0, last_section_number=0 -- two
+    # distinct single-byte fields, not one: a real disc's own PAT/PMT (and this bug, found by
+    # comparing byte-for-byte against one) has 0x00 0x00 here, not a single combined 0x00.
+    payload = struct.pack(">HBBB", 1, 0xC1, 0x00, 0x00)
+    payload += struct.pack(">HH", 0, 0xE000 | _NETWORK_PID)  # program_number 0: the network PID entry
     payload += struct.pack(">HH", program_number, 0xE000 | PMT_PID)
     return _section(0x00, payload)
 
 
+# A real commercial disc's own PMT (both its menu clips and tsMuxeR's own output for ours) always
+# carries these two descriptors at the program level: a registration_descriptor (tag 5) with
+# format_identifier "HDMV" -- the standard way an MPEG-TS program declares itself as BD-ROM HDMV
+# content -- and a second, vendor-private one (tag 0x88) that even libbluray's own PMT dissector
+# reports as "Unknown Private". Its 4 payload bytes were not the same on tsMuxeR's own output and
+# on the reference disc's own clip, so they are not some fixed disc-wide constant; the tag and
+# length being present at all is what a strict parser could plausibly care about, so this
+# reproduces the reference disc's own exact bytes. See docs/hdmv-ig-notes.md.
+_HDMV_REGISTRATION_DESCRIPTOR = bytes([0x05, 0x04]) + b"HDMV"
+_PRIVATE_DESCRIPTOR_0x88 = bytes([0x88, 0x04, 0x0F, 0xFF, 0xFF, 0xFF])
+_PROGRAM_DESCRIPTORS = _HDMV_REGISTRATION_DESCRIPTOR + _PRIVATE_DESCRIPTOR_0x88
+
+
 def _pmt_section() -> bytes:
-    payload = struct.pack(">HBB", 1, 0xC1, 0x00)  # program_number=1, version=0/current, section 0/0
+    # program_number=1, version=0/current, section_number=0, last_section_number=0
+    payload = struct.pack(">HBBB", 1, 0xC1, 0x00, 0x00)
     payload += struct.pack(">H", 0xE000 | PCR_PID)
-    payload += struct.pack(">H", 0xF000)  # program_info_length = 0
+    payload += struct.pack(">H", 0xF000 | len(_PROGRAM_DESCRIPTORS)) + _PROGRAM_DESCRIPTORS
     payload += struct.pack(">BH", IG_STREAM_TYPE, 0xE000 | IG_PID) + struct.pack(">H", 0xF000)  # ES_info_length = 0
     return _section(0x02, payload)
 

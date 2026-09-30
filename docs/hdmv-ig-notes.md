@@ -304,6 +304,44 @@ structure, was necessary. **A real commercial disc's own choices are not inciden
 they seem like an implementation detail (a codec) rather than part of the BD-ROM navigation
 model itself** -- this is the practical lesson of this whole investigation.
 
+### 4.5. The IG clip's own PMT was missing its program-level descriptors -- and a real PSI bug
+
+Comparing our from-scratch IG clip's PMT against the reference disc's own (`mpls_dump`/manual
+PSI parsing, not a libbluray tool -- nothing checks this file's PMT during real playback, more
+on that below) found two things:
+
+**Missing descriptors**: every real clip inspected -- both the reference disc's own IG SubPath
+clip and tsMuxeR's own output for our background clip -- carries two descriptors at the
+*program* level (`program_info_length` in the PMT, before the stream loop): a
+`registration_descriptor` (tag `0x05`) with `format_identifier` = `"HDMV"`, the standard way an
+MPEG-TS program declares itself as BD-ROM/HDMV content, and a second, vendor-private one
+(tag `0x88`, 4 bytes of payload) that even libbluray's own PMT dissector reports as
+`"Unknown Private"`. Our own from-scratch PMT (`menu/ig_clip.py`) had `program_info_length = 0`
+-- no descriptors at all. The `0x88` descriptor's 4 payload bytes were *not* identical between
+tsMuxeR's own output and the reference disc's clip, so they are not a fixed, disc-wide constant
+(possibly a per-mux counter or format hint); the tag and length being present at all, with the
+reference disc's own exact bytes, is what was matched.
+
+**A real, independent PSI conformance bug, found along the way**: comparing byte-for-byte
+surfaced that our own PAT/PMT section writer (`_pat_section`/`_pmt_section`) encoded
+`section_number` and `last_section_number` -- two distinct 8-bit fields, always present in that
+order in any MPEG-2 PSI long-form section -- as a *single* combined byte, silently dropping one
+of them and shifting every field after it (PCR PID, descriptors, the stream loop) one byte out
+of its real position. Comparing the same offset against the reference disc's own PAT/PMT (both
+bytes present, both `0x00`) is what caught it. This almost certainly never affected real
+playback: a BD player already knows an IG SubPath's PID directly from the playlist's own STN
+table (see section 3), so nothing appears to actually re-parse the IG clip's own PMT during
+normal navigation -- our own test suite caught neither the missing descriptors nor the
+off-by-one byte because every check computed its expected offsets from the same (buggy)
+assumption on both the write and the read side, which is exactly the kind of self-consistent
+but wrong result independent verification (checking against the disc's own real, external bytes
+instead of our own code's assumptions) is for.
+
+**The PAT has the same gap**: every real clip inspected (the reference disc's, and tsMuxeR's own
+output for our own clips) lists **two** programs in its PAT, not one: `program_number 0` mapped
+to `PID 0x1F` (the "network PID" entry) *and* the actual program mapped to the PMT's own PID. Our
+from-scratch PAT (`_pat_section`) only had the second one. Both fixes are in `menu/ig_clip.py`.
+
 ## 5. Timing: two different clocks, and a real decode-time buffer
 
 - **PES `PTS`/`DTS` are in a 90 kHz clock**, standard MPEG convention.
